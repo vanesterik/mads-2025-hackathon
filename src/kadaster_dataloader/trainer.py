@@ -37,7 +37,7 @@ class TrainingConfig:
     csv_path: str = "assets/rechtsfeiten.csv"
     batch_size: int = 32
     split_ratio: float = 0.8
-    model_name: str = "prajjwal1/bert-medium"
+    model_name: str = "prajjwal1/bert-tiny"
     learning_rate: float = 1e-3
     num_epochs: int = 50
     device: str = get_default_device()
@@ -58,7 +58,7 @@ class Trainer:
         self.classifier = None
 
         # Optimization
-        self.criterion = None
+        self.loss_fn = None
         self.optimizer = None
 
         # Components
@@ -126,7 +126,7 @@ class Trainer:
         self.classifier.to(self.device)
 
     def setup_optimization(self):
-        self.criterion = nn.BCEWithLogitsLoss()
+        self.loss_fn = nn.BCEWithLogitsLoss()
         self.optimizer = optim.Adam(
             self.classifier.parameters(), lr=self.config.learning_rate
         )
@@ -134,7 +134,7 @@ class Trainer:
     def train_epoch(self, epoch: int):
         assert self.classifier is not None
         assert self.optimizer is not None
-        assert self.criterion is not None
+        assert self.loss_fn is not None
 
         self.classifier.train()
         total_loss = 0.0
@@ -162,7 +162,7 @@ class Trainer:
                 logits = self.classifier(embeddings)
 
             # Compute loss
-            loss = self.criterion(logits, labels)
+            loss = self.loss_fn(logits, labels)
 
             # Backward pass
             loss.backward()
@@ -176,7 +176,7 @@ class Trainer:
 
     def validate(self, epoch: int) -> Dict[str, Any]:
         assert self.classifier is not None
-        assert self.criterion is not None
+        assert self.loss_fn is not None
         assert self.evaluator is not None
 
         self.classifier.eval()
@@ -200,7 +200,7 @@ class Trainer:
 
                     logits = self.classifier(embeddings)
 
-                loss = self.criterion(logits, labels)
+                loss = self.loss_fn(logits, labels)
                 total_loss += loss.item()
 
                 # Predictions for metrics (sigmoid > 0.5)
