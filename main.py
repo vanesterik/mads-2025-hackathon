@@ -76,7 +76,6 @@ def evaluate_regex(
     from pathlib import Path
 
     from kadaster_dataloader.dataset import DatasetFactory
-    from kadaster_dataloader.model import TextVectorizer
     from kadaster_dataloader.regex_model import RegexVectorizer
 
     logger.info("Initializing DatasetFactory...")
@@ -88,34 +87,21 @@ def evaluate_regex(
     assert factory.encoder is not None, "LabelEncoder is None"
     regex_vectorizer = RegexVectorizer(generator, label_encoder=factory.encoder)
 
-    # Append hash to output filename for versioning
-
     p = Path(output_path)
     output_path = str(p.with_name(f"{p.stem}_{regex_vectorizer.hash}{p.suffix}"))
 
-    logger.info("Getting (cached) vectorized dataset...")
-    text_vectorizer = TextVectorizer("prajjwal1/bert-tiny")  # Default
-
-    vectorized_data = factory.get_vectorized_dataset(text_vectorizer, regex_vectorizer)
+    vectorized_data = factory.get_vectorized_dataset(
+        vectorizer=None, regex_vectorizer=regex_vectorizer
+    )
     train_data = vectorized_data["train"]
 
     logger.info("Evaluating on training set...")
-
-    # Get the tensors
-    # train_data[i] returns (embedding, regex_feat, label)
-    # We can access the full tensors directly from the dataset object if we exposed them,
-    # but let's iterate or access attributes if possible.
-    # VectorizedRechtsfeitDataset stores them as attributes.
-
     regex_features = train_data.regex_features  # Shape: (N, NumClasses)
     true_labels = train_data.labels  # Shape: (N, NumClasses)
 
     if regex_features is None:
         logger.error("Regex features not found in dataset!")
         return
-
-    # Convert to numpy for easier metric calculation or use torch
-    # Let's use the same logic as before but vectorized
 
     # True Positives: both are 1
     tp = (regex_features * true_labels).sum(dim=0)

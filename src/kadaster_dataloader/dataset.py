@@ -95,8 +95,8 @@ class RechtsfeitDataset(Dataset):
 class VectorizedRechtsfeitDataset(Dataset):
     def __init__(
         self,
-        embeddings: torch.Tensor,
         labels: torch.Tensor,
+        embeddings: Optional[torch.Tensor] = None,
         regex_features: Optional[torch.Tensor] = None,
     ):
         self.embeddings = embeddings
@@ -104,16 +104,26 @@ class VectorizedRechtsfeitDataset(Dataset):
         self.regex_features = regex_features
 
     def __len__(self) -> int:
-        return len(self.embeddings)
+        return len(self.labels)
 
     def __getitem__(
         self, idx
     ) -> Union[
         Tuple[torch.Tensor, torch.Tensor],
         Tuple[torch.Tensor, torch.Tensor, torch.Tensor],
+        Tuple[None, torch.Tensor, torch.Tensor],
     ]:
+        # Return format: (embeddings, labels, regex_features)
+        # If embeddings is None, we return None for it
+
         if self.regex_features is not None:
-            return self.embeddings[idx], self.labels[idx], self.regex_features[idx]
+            if self.embeddings is not None:
+                return self.embeddings[idx], self.labels[idx], self.regex_features[idx]
+            else:
+                return None, self.labels[idx], self.regex_features[idx]
+
+        if self.embeddings is None:
+            raise ValueError("Both embeddings and regex_features cannot be None")
 
         return self.embeddings[idx], self.labels[idx]
 
@@ -142,7 +152,8 @@ class DatasetFactory:
         logger.info("Building label index from training data...")
         train_codes: List[int] = []
         for codes in train_data["rechtsfeitcodes"]:
-            train_codes.extend(codes)
+            # Ensure all codes are integers to avoid duplicates (str vs int)
+            train_codes.extend([int(c) for c in codes])
 
         self.encoder = LabelEncoder(train_codes)
         logger.info(f"Found {len(self.encoder)} unique categories (including Unknown).")
@@ -174,7 +185,7 @@ class DatasetFactory:
 
     def get_vectorized_dataset(
         self,
-        vectorizer,
+        vectorizer=None,
         regex_vectorizer=None,
         cache_dir: str = "artifacts/vectorcache",
     ) -> Dict[str, VectorizedRechtsfeitDataset]:
@@ -189,14 +200,18 @@ class DatasetFactory:
         splits = ["train", "test"]
 
         # Create a slug for the model name to use in filenames
-        model_name_slug = vectorizer.model_name.replace("/", "_")
+        if vectorizer:
+            model_name_slug = vectorizer.model_name.replace("/", "_")
+            device = next(vectorizer.model.parameters()).device
+            logger.info(
+                f"Vectorizing datasets on {device} for model {vectorizer.model_name}..."
+            )
+        else:
+            model_name_slug = "no_text_model"
+            logger.info("No text vectorizer provided. Skipping text embeddings.")
+
         cache_path = Path(cache_dir)
         cache_path.mkdir(parents=True, exist_ok=True)
-
-        device = next(vectorizer.model.parameters()).device
-        logger.info(
-            f"Vectorizing datasets on {device} for model {vectorizer.model_name}..."
-        )
 
         # Ensure base datasets are loaded
         self.get_dataset()
@@ -205,24 +220,35 @@ class DatasetFactory:
             logger.info(f"Processing {split} set...")
             dataset = self.train_dataset if split == "train" else self.test_dataset
 
-            # 1. Embeddings
-            emb_path = cache_path / f"{model_name_slug}_{split}_embeddings.pt"
+            # 1. Embeddings (Only if vectorizer is provided)
+            embeddings = None
+            if vectorizer:
+                emb_path = cache_path / f"{model_name_slug}_{split}_embeddings.pt"
 
-            def compute_embeddings():
-                all_embeddings = []
-                # Use a larger batch size for inference if possible
-                batch_size = 64
-                dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
+                def compute_embeddings():
+                    all_embeddings = []
+                    # Use a larger batch size for inference if possible
+                    batch_size = 64
+                    dataloader = DataLoader(
+                        dataset, batch_size=batch_size, shuffle=False
+                    )
 
-                with torch.no_grad():
-                    for batch_texts, _ in tqdm(dataloader, desc=f"Vectorizing {split}"):
-                        embeddings = vectorizer.forward(list(batch_texts))
-                        all_embeddings.append(embeddings.cpu())
-                return torch.cat(all_embeddings, dim=0)
+                    with torch.no_grad():
+                        for batch_texts, _ in tqdm(
+                            dataloader, desc=f"Vectorizing {split}"
+                        ):
+                            emb = vectorizer.forward(list(batch_texts))
+                            all_embeddings.append(emb.cpu())
+                    return torch.cat(all_embeddings, dim=0)
 
-            embeddings = load_or_compute_tensor(emb_path, compute_embeddings)
+                embeddings = load_or_compute_tensor(emb_path, compute_embeddings)
 
             # 2. Labels
+            # We use the model slug in the label filename too, to keep them paired,
+            # though labels are technically model-independent.
+            # But if we change the split ratio, everything changes.
+            # Ideally labels should be cached by split/dataset hash.
+            # For now, let's keep using model_name_slug or a default if None.
             lbl_path = cache_path / f"{model_name_slug}_{split}_labels.pt"
 
             def compute_labels():
@@ -255,7 +281,7 @@ class DatasetFactory:
                 regex_features = load_or_compute_tensor(regex_path, compute_regex)
 
             vectorized_datasets[split] = VectorizedRechtsfeitDataset(
-                embeddings, labels, regex_features
+                labels=labels, embeddings=embeddings, regex_features=regex_features
             )
 
         return vectorized_datasets
