@@ -15,28 +15,33 @@ A utility for loading and processing Kadaster datasets, specifically designed fo
 ### 1. Analysis
 Generate a label distribution plot to understand the dataset balance.
 ```bash
-uv run python main.py analyze
+python main.py analyze
 ```
 Output: `artifacts/img/label_distribution.png`
 
 ### 2. Regex Evaluation
 Evaluate the performance of the regex-based model on the training set.
 ```bash
-uv run python main.py evaluate-regex
+python main.py evaluate-regex
 ```
 Output: `artifacts/csv/regex_evaluation.csv`
 
 ### 3. Training
 Train the model. You can choose between the simple BERT classifier or the Hybrid model.
 
-**Simple Classifier (BERT only):**
+**Neural Classifier (BERT only):**
 ```bash
-uv run python main.py train --model-class NeuralClassifier --epochs 5
+python main.py train --model-class NeuralClassifier --epochs 5 --model-name prajjwal1/bert-mini
 ```
 
 **Hybrid Classifier (BERT + Regex):**
 ```bash
-uv run python main.py train --model-class HybridClassifier --epochs 5
+python main.py train --model-class HybridClassifier --epochs 5 --model-name prajjwal1/bert-mini
+```
+
+**Regex Only Classifier:**
+```bash
+python main.py train --model-class RegexOnlyClassifier --epochs 5
 ```
 
 ## Architecture

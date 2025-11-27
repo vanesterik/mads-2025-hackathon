@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+from loguru import logger
 from transformers import AutoModel, AutoTokenizer
 
 
@@ -8,7 +9,7 @@ class TextVectorizer:
     Wraps a HuggingFace model to vectorize text.
     """
 
-    def __init__(self, model_name: str = "sentence-transformers/all-MiniLM-L6-v2"):
+    def __init__(self, model_name: str):
         self.model_name = model_name
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
         self.model = AutoModel.from_pretrained(model_name)
@@ -89,6 +90,7 @@ class HybridClassifier(nn.Module):
 
         # Concatenated input dimension
         combined_dim = input_dim + regex_dim
+        logger.info(f"Combined dimension: {combined_dim}")
 
         self.sequential = nn.Sequential(
             nn.Linear(combined_dim, hidden_dim),

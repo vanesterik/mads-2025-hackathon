@@ -11,10 +11,32 @@ app = typer.Typer(no_args_is_help=True)
 
 
 @app.command()
+def analyze(
+    data_path: str = "assets/aktes.jsonl",
+):
+    """
+    Analyze the dataset and generate a label distribution plot.
+    """
+    from kadaster_dataloader.analysis import analyze_label_distribution
+    from kadaster_dataloader.dataset import DatasetFactory
+
+    logger.info("Loading data for analysis...")
+    factory = DatasetFactory(data_path)
+
+    logger.info("Analyzing label distribution...")
+    assert factory.train_dataset is not None, "Train dataset is None"
+    analyze_label_distribution(factory.train_dataset)
+    logger.info("Analysis complete. Check artifacts/img/label_distribution.png")
+
+
+@app.command()
 def train(
     model_class: str = typer.Option(
         "NeuralClassifier",
         help="Model class to use: NeuralClassifier, HybridClassifier, or RegexOnlyClassifier",
+    ),
+    model_name: str = typer.Option(
+        "prajjwal1/bert-tiny", help="HuggingFace model name for text vectorization"
     ),
     epochs: int = typer.Option(10, help="Number of epochs"),
     batch_size: int = typer.Option(32, help="Batch size"),
@@ -31,6 +53,7 @@ def train(
         num_epochs=epochs,
         batch_size=batch_size,
         model_class=model_class,
+        model_name=model_name,
         learning_rate=learning_rate,
         use_regex=use_regex,
     )
@@ -50,7 +73,10 @@ def evaluate_regex(
     """
     Evaluate the regex model using cached features.
     """
+    from pathlib import Path
+
     from kadaster_dataloader.dataset import DatasetFactory
+    from kadaster_dataloader.model import TextVectorizer
     from kadaster_dataloader.regex_model import RegexVectorizer
 
     logger.info("Initializing DatasetFactory...")
@@ -59,24 +85,16 @@ def evaluate_regex(
     logger.info("Initializing Regex Model...")
     generator = RegexGenerator(csv_path)
     # Use the encoder from the factory for alignment
+    assert factory.encoder is not None, "LabelEncoder is None"
     regex_vectorizer = RegexVectorizer(generator, label_encoder=factory.encoder)
 
     # Append hash to output filename for versioning
-    from pathlib import Path
 
     p = Path(output_path)
     output_path = str(p.with_name(f"{p.stem}_{regex_vectorizer.hash}{p.suffix}"))
 
     logger.info("Getting (cached) vectorized dataset...")
-    # We only need the regex features, but the factory computes them alongside embeddings if we use get_vectorized_dataset.
-    # To avoid computing BERT embeddings if they aren't needed, we could have a separate method,
-    # but for now let's assume we might want them or they are already cached.
-    # Actually, we can pass a dummy vectorizer if we really wanted to avoid BERT, but let's stick to the standard flow.
-    # Since we need to pass a vectorizer to get_vectorized_dataset, let's just instantiate the TextVectorizer.
-    # It won't compute if cache exists.
-    from kadaster_dataloader.model import TextVectorizer
-
-    text_vectorizer = TextVectorizer("prajjwal1/bert-medium")  # Default
+    text_vectorizer = TextVectorizer("prajjwal1/bert-tiny")  # Default
 
     vectorized_data = factory.get_vectorized_dataset(text_vectorizer, regex_vectorizer)
     train_data = vectorized_data["train"]
@@ -149,24 +167,6 @@ def evaluate_regex(
     logger.info(
         "\n" + df.head(10)[["code", "f1", "precision", "recall", "regex"]].to_string()
     )
-
-
-@app.command()
-def analyze(
-    data_path: str = "assets/aktes.jsonl",
-):
-    """
-    Analyze the dataset and generate a label distribution plot.
-    """
-    from kadaster_dataloader.analysis import analyze_label_distribution
-    from kadaster_dataloader.dataset import DatasetFactory
-
-    logger.info("Loading data for analysis...")
-    factory = DatasetFactory(data_path)
-
-    logger.info("Analyzing label distribution...")
-    analyze_label_distribution(factory.train_dataset)
-    logger.info("Analysis complete. Check artifacts/img/label_distribution.png")
 
 
 if __name__ == "__main__":

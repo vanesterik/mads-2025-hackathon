@@ -36,7 +36,7 @@ class TrainingConfig:
     csv_path: str = "assets/rechtsfeiten.csv"
     batch_size: int = 32
     split_ratio: float = 0.8
-    model_name: str = "prajjwal1/bert-tiny"
+    model_name: str = "prajjwal1/bert-mini"
     learning_rate: float = 1e-3
     num_epochs: int = 50
     device: str = get_default_device()
@@ -263,9 +263,12 @@ class Trainer:
         self.logger.log_params(asdict(self.config))
 
         # Log model tags (hashes)
-        tags = {
-            "text_model_name": self.vectorizer.model_name,
-        }
+        tags = {}
+
+        # Only log text model name if we are using it (Neural or Hybrid)
+        if self.config.model_class != "RegexOnlyClassifier":
+            tags["text_model_name"] = self.vectorizer.model_name
+
         if self.regex_vectorizer:
             tags["regex_hash"] = self.regex_vectorizer.hash
 

@@ -1,4 +1,4 @@
-import os
+from pathlib import Path
 from typing import Dict, List, Optional
 
 import matplotlib.pyplot as plt
@@ -19,8 +19,8 @@ class Evaluator:
         )
 
         # Ensure artifacts directories exist
-        os.makedirs("artifacts/img", exist_ok=True)
-        os.makedirs("artifacts/csv", exist_ok=True)
+        Path("artifacts/img").mkdir(exist_ok=True)
+        Path("artifacts/csv").mkdir(exist_ok=True)
 
     def _get_filename(
         self, base_name: str, tags: Optional[Dict[str, str]], ext: str
@@ -31,12 +31,12 @@ class Evaluator:
         if not tags:
             return f"artifacts/{folder}/{base_name}.{ext}"
 
-        # Construct suffix from tags (e.g. _bert-tiny_f66bce0c)
+        # Construct suffix from tags (e.g. _bert-mini_f66bce0c)
         # We prioritize regex_hash if present, then text_model_name
         parts = [base_name]
 
         if "text_model_name" in tags:
-            # Clean model name (prajjwal1/bert-tiny -> prajjwal1_bert-tiny)
+            # Clean model name (prajjwal1/bert-mini -> prajjwal1_bert-mini)
             clean_name = tags["text_model_name"].replace("/", "_")
             parts.append(clean_name)
 
@@ -84,13 +84,14 @@ class Evaluator:
         support = targets.sum(axis=0)
 
         data = []
+        # use .5f precision for float columns
         for i, name in enumerate(self.class_names):
             data.append(
                 {
                     "class_name": name,
-                    "precision": precision[i],
-                    "recall": recall[i],
-                    "f1": f1[i],
+                    "precision": f"{precision[i]:.5f}",
+                    "recall": f"{recall[i]:.5f}",
+                    "f1": f"{f1[i]:.5f}",
                     "support": support[i],
                 }
             )
