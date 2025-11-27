@@ -1,10 +1,13 @@
 import sys
-from typing import Dict, List, Optional
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple, Union
 
 import torch
+from datasets import Dataset as HFDataset
 from datasets import load_dataset
 from loguru import logger
 from torch.utils.data import DataLoader, Dataset
+from tqdm import tqdm
 
 # Configure logger
 logger.remove()
@@ -14,26 +17,30 @@ logger.add("logs/dataset.log", rotation="10 MB", level="DEBUG")
 
 class LabelEncoder:
     """
-    Helper to map raw sparse integer codes to dense indices (0..N) and back.
+    Helper to map raw sparse integer codes (504, 508, etc.) to dense indices (0, 1, ..., N) and back.
     Reserves index 0 for 'Unknown' codes.
     """
 
     def __init__(self, train_codes: List[int]):
         # Get unique codes and sort them for deterministic behavior
-        self.unique_codes = sorted(list(set(train_codes)))
+        self.unique_codes: List[int] = sorted(list(set(train_codes)))
 
         # Reserve 0 for unknown
-        self.unknown_idx = 0
+        self.unknown_idx: int = 0
 
         # Create mappings
         # We start real codes from index 1
-        self.code2idx = {code: i + 1 for i, code in enumerate(self.unique_codes)}
-        self.idx2code = {i + 1: code for i, code in enumerate(self.unique_codes)}
+        self.code2idx: Dict[int, int] = {
+            code: i + 1 for i, code in enumerate(self.unique_codes)
+        }
+        self.idx2code: Dict[int, int] = {
+            i + 1: code for i, code in enumerate(self.unique_codes)
+        }
 
         # Add unknown mapping
         self.idx2code[self.unknown_idx] = 0
 
-    def __len__(self):
+    def __len__(self) -> int:
         # +1 for the unknown category
         return len(self.unique_codes) + 1
 
@@ -67,29 +74,55 @@ class LabelEncoder:
 
 
 class RechtsfeitDataset(Dataset):
-    def __init__(self, hf_dataset, encoder: LabelEncoder):
+    def __init__(self, hf_dataset: HFDataset, encoder: LabelEncoder):
         self.dataset = hf_dataset
         self.encoder = encoder
 
-    def __len__(self):
+    def __len__(self) -> int:
         return len(self.dataset)
 
-    def __getitem__(self, idx):
+    def __getitem__(self, idx: int) -> Tuple[str, torch.Tensor]:
         item = self.dataset[idx]
-        text = item["text"]
-        raw_codes = item["rechtsfeitcodes"]
+        text: str = item["text"]
+        raw_codes: List[int] = item["rechtsfeitcodes"]
 
         # Transform raw codes to Multi-Hot Tensor
-        label_tensor = self.encoder.encode(raw_codes)
+        label_tensor: torch.Tensor = self.encoder.encode(raw_codes)
 
         return text, label_tensor
 
 
+class VectorizedRechtsfeitDataset(Dataset):
+    def __init__(
+        self,
+        embeddings: torch.Tensor,
+        labels: torch.Tensor,
+        regex_features: Optional[torch.Tensor] = None,
+    ):
+        self.embeddings = embeddings
+        self.labels = labels
+        self.regex_features = regex_features
+
+    def __len__(self) -> int:
+        return len(self.embeddings)
+
+    def __getitem__(
+        self, idx
+    ) -> Union[
+        Tuple[torch.Tensor, torch.Tensor],
+        Tuple[torch.Tensor, torch.Tensor, torch.Tensor],
+    ]:
+        if self.regex_features is not None:
+            return self.embeddings[idx], self.labels[idx], self.regex_features[idx]
+
+        return self.embeddings[idx], self.labels[idx]
+
+
 class DatasetFactory:
     def __init__(self, file_path: str, batch_size: int = 32, split_ratio: float = 0.8):
-        self.file_path = file_path
-        self.batch_size = batch_size
-        self.split_ratio = split_ratio
+        self.file_path: str = file_path
+        self.batch_size: int = batch_size
+        self.split_ratio: float = split_ratio
 
         self.train_dataset: Optional[RechtsfeitDataset] = None
         self.test_dataset: Optional[RechtsfeitDataset] = None
@@ -97,27 +130,23 @@ class DatasetFactory:
 
         self._prepare_data()
 
-    def _prepare_data(self):
+    def _prepare_data(self) -> None:
         logger.info(f"Loading {self.file_path}...")
-        # Load the full dataset
         full_dataset = load_dataset("json", data_files=self.file_path, split="train")
 
-        # Split the dataset
-        # We use a fixed seed for reproducibility
         split_ds = full_dataset.train_test_split(train_size=self.split_ratio, seed=42)
         train_data = split_ds["train"]
         test_data = split_ds["test"]
 
         # Build encoder based ONLY on training data
         logger.info("Building label index from training data...")
-        train_codes = []
+        train_codes: List[int] = []
         for codes in train_data["rechtsfeitcodes"]:
             train_codes.extend(codes)
 
         self.encoder = LabelEncoder(train_codes)
         logger.info(f"Found {len(self.encoder)} unique categories (including Unknown).")
 
-        # Create Dataset objects
         self.train_dataset = RechtsfeitDataset(train_data, self.encoder)
         self.test_dataset = RechtsfeitDataset(test_data, self.encoder)
 
@@ -143,16 +172,126 @@ class DatasetFactory:
 
         return {"train": train_loader, "test": test_loader}
 
+    def get_vectorized_dataset(
+        self,
+        vectorizer,
+        regex_vectorizer=None,
+        cache_dir: str = "artifacts/vectorcache",
+    ) -> Dict[str, VectorizedRechtsfeitDataset]:
+        """
+        Pre-computes embeddings for the entire dataset using the provided vectorizer.
+        If regex_vectorizer is provided, also computes regex features.
+        Results are cached to disk.
+        """
+        from kadaster_dataloader.utils import load_or_compute_tensor
+
+        vectorized_datasets = {}
+        splits = ["train", "test"]
+
+        # Create a slug for the model name to use in filenames
+        model_name_slug = vectorizer.model_name.replace("/", "_")
+        cache_path = Path(cache_dir)
+        cache_path.mkdir(parents=True, exist_ok=True)
+
+        device = next(vectorizer.model.parameters()).device
+        logger.info(
+            f"Vectorizing datasets on {device} for model {vectorizer.model_name}..."
+        )
+
+        # Ensure base datasets are loaded
+        self.get_dataset()
+
+        for split in splits:
+            logger.info(f"Processing {split} set...")
+            dataset = self.train_dataset if split == "train" else self.test_dataset
+
+            # 1. Embeddings
+            emb_path = cache_path / f"{model_name_slug}_{split}_embeddings.pt"
+
+            def compute_embeddings():
+                all_embeddings = []
+                # Use a larger batch size for inference if possible
+                batch_size = 64
+                dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
+
+                with torch.no_grad():
+                    for batch_texts, _ in tqdm(dataloader, desc=f"Vectorizing {split}"):
+                        embeddings = vectorizer.forward(list(batch_texts))
+                        all_embeddings.append(embeddings.cpu())
+                return torch.cat(all_embeddings, dim=0)
+
+            embeddings = load_or_compute_tensor(emb_path, compute_embeddings)
+
+            # 2. Labels
+            lbl_path = cache_path / f"{model_name_slug}_{split}_labels.pt"
+
+            def compute_labels():
+                all_labels = []
+                dataloader = DataLoader(dataset, batch_size=64, shuffle=False)
+                for _, batch_labels in dataloader:
+                    all_labels.append(batch_labels)
+                return torch.cat(all_labels, dim=0)
+
+            labels = load_or_compute_tensor(lbl_path, compute_labels)
+
+            # 3. Regex Features (Optional)
+            regex_features = None
+            if regex_vectorizer:
+                regex_path = cache_path / f"{model_name_slug}_{split}_regex.pt"
+
+                def compute_regex():
+                    all_regex = []
+                    # Regex vectorizer might be CPU bound, batch size matters less for GPU memory but good for progress bar
+                    dataloader = DataLoader(dataset, batch_size=64, shuffle=False)
+                    for batch_texts, _ in tqdm(
+                        dataloader, desc=f"Regex Vectorizing {split}"
+                    ):
+                        feats = regex_vectorizer.forward(list(batch_texts))
+                        all_regex.append(feats)
+                    return torch.cat(all_regex, dim=0)
+
+                regex_features = load_or_compute_tensor(regex_path, compute_regex)
+
+            vectorized_datasets[split] = VectorizedRechtsfeitDataset(
+                embeddings, labels, regex_features
+            )
+
+        return vectorized_datasets
+
+    def get_vectorized_loader(
+        self, vectorizer, regex_vectorizer=None
+    ) -> Dict[str, DataLoader]:
+        """
+        Returns DataLoaders for pre-vectorized data.
+        """
+        datasets = self.get_vectorized_dataset(vectorizer, regex_vectorizer)
+
+        train_loader = DataLoader(
+            datasets["train"], batch_size=self.batch_size, shuffle=True
+        )
+
+        test_loader = DataLoader(
+            datasets["test"], batch_size=self.batch_size, shuffle=False
+        )
+
+        return {"train": train_loader, "test": test_loader}
+
 
 if __name__ == "__main__":
     logger.info("Starting dataset processing...")
     from pathlib import Path
 
     datadir = Path("data/raw")
-    file_path = "ai_challenge_data_anonymized_19789.jsonl"
+    file_path = "aktes.jsonl"
     path = datadir / file_path
 
     factory = DatasetFactory(str(path), batch_size=2, split_ratio=0.6)
+    dataset = factory.get_dataset()
+    train = dataset["train"]
+    X, y = train[0]
+    logger.info(f"First x {X[:100]}, type {type(X)}")
+    logger.info(f"First y {y}, type {type(y)}")
+
     loaders = factory.get_loader()
 
     # Assert encoder is initialized for mypy
@@ -162,6 +301,7 @@ if __name__ == "__main__":
     for batch_texts, batch_labels in loaders["train"]:
         logger.info(f"Batch text count: {len(batch_texts)}")
         logger.info(f"Batch labels shape: {batch_labels.shape}")
+        # Decode the first label in the batch
         logger.info(f"Sample restored codes: {factory.encoder.decode(batch_labels[0])}")
         break
 
