@@ -13,3 +13,8 @@ wheels/
 data/
 dev/
 logs/
+artifacts/*
+!artifacts/.gitkeep
+assets/*
+!assets/.gitkeep
+mlruns/
