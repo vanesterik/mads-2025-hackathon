@@ -31,7 +31,7 @@ Train the model. You can choose between the simple BERT classifier or the Hybrid
 
 **Simple Classifier (BERT only):**
 ```bash
-uv run python main.py train --model-class SimpleClassifier --epochs 5
+uv run python main.py train --model-class NeuralClassifier --epochs 5
 ```
 
 **Hybrid Classifier (BERT + Regex):**
@@ -62,4 +62,34 @@ $$
     $$ f_{hybrid}(t) = f_{bert}(t) \oplus f_{regex}(t) \in \mathbb{R}^{768+166} $$
 4.  **Classification**: A Multi-Layer Perceptron (MLP) maps the combined features to class probabilities.
     $$ f_{mlp}: \mathbb{R}^{934} \to [0, 1]^{NumClasses} $$
+
+## Caching & Versioning
+
+To optimize performance, the system caches vectorized features in `artifacts/vectorcache/`.
+
+*   **Embeddings**: Cached based on the model name (e.g., `prajjwal1_bert-tiny_train_embeddings.pt`).
+*   **Regex Features**: Cached based on a **hash of the regex patterns** (e.g., `regex_f66bce0c_train.pt`).
+
+This ensures that if you modify the regex logic or the CSV file, the hash changes, invalidating the cache and forcing a recomputation.
+
+Similarly, evaluation results are saved with the hash (e.g., `artifacts/csv/regex_evaluation_f66bce0c.csv`) to allow tracking performance across different regex versions.
+
+## MLFlow Tracking
+
+### Local Setup
+By default, experiments are logged to a local SQLite database in `logs/mlflow.db`. To view the dashboard:
+
+```bash
+uv run mlflow ui --backend-store-uri sqlite:///logs/mlflow.db
+```
+
+### Remote Setup
+To log to a remote MLFlow server (e.g., provided by your instructor):
+
+1.  Open `.env` and set the tracking URI:
+    ```bash
+    MLFLOW_TRACKING_URI=http://<host-ip>:5000
+    ```
+2.  Run your training commands as usual. The logs will automatically be sent to the server.
+
 curl -sSL https://raw.githubusercontent.com/raoulg/private-data-hosting/refs/heads/main/download_data.sh | bash -s -- -o data/raw
