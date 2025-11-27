@@ -43,18 +43,16 @@ uv run python main.py train --model-class HybridClassifier --epochs 5
 
 The system uses a **Hybrid Architecture** that combines deep learning embeddings with symbolic regex features.
 
-### Category-Theoretic View
-
 We can view the models as functors mapping from the space of text documents $\mathcal{T}$ to vector spaces $\mathbb{R}^d$.
 
-```mermaid
-graph LR
-    T[Text Document <br/> T] -->|TextVectorizer| V1[BERT Embedding <br/> R^768]
-    T -->|RegexVectorizer| V2[Regex Features <br/> R^166]
-    V1 --> C[Concatenation <br/> R^934]
-    V2 --> C
-    C -->|MLP| O[Logits <br/> R^NumClasses]
-```
+$$
+\begin{aligned}
+v_{bert} &= f_{bert}(t) \in \mathbb{R}^{768} \\
+v_{regex} &= f_{regex}(t) \in \{0,1\}^{166} \\
+v_{combined} &= [v_{bert}, v_{regex}] \in \mathbb{R}^{934} \\
+\hat{y} &= \text{softmax}(\text{MLP}(v_{combined}))
+\end{aligned}
+$$
 
 1.  **Text Vectorizer**: Maps text to a dense semantic space.
     $$ f_{bert}: \mathcal{T} \to \mathbb{R}^{768} $$
