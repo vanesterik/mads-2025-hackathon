@@ -12,17 +12,27 @@ app = typer.Typer(no_args_is_help=True)
 
 @app.command()
 def train(
-    epochs: int = 50,
-    batch_size: int = 32,
-    model_class: str = "HybridClassifier",
+    model_class: str = typer.Option(
+        "NeuralClassifier",
+        help="Model class to use: NeuralClassifier, HybridClassifier, or RegexOnlyClassifier",
+    ),
+    epochs: int = typer.Option(10, help="Number of epochs"),
+    batch_size: int = typer.Option(32, help="Batch size"),
+    learning_rate: float = typer.Option(1e-3, help="Learning rate"),
     device: Optional[str] = None,
 ):
     """
     Train the model.
     """
+    # set use_regex=True if HybridClassifier or RegexOnlyClassifier is selected
+    use_regex = model_class in ["HybridClassifier", "RegexOnlyClassifier"]
     logger.info("Starting training...")
     config = TrainingConfig(
-        num_epochs=epochs, batch_size=batch_size, model_class=model_class
+        num_epochs=epochs,
+        batch_size=batch_size,
+        model_class=model_class,
+        learning_rate=learning_rate,
+        use_regex=use_regex,
     )
     if device:
         config.device = device
@@ -50,6 +60,12 @@ def evaluate_regex(
     generator = RegexGenerator(csv_path)
     # Use the encoder from the factory for alignment
     regex_vectorizer = RegexVectorizer(generator, label_encoder=factory.encoder)
+
+    # Append hash to output filename for versioning
+    from pathlib import Path
+
+    p = Path(output_path)
+    output_path = str(p.with_name(f"{p.stem}_{regex_vectorizer.hash}{p.suffix}"))
 
     logger.info("Getting (cached) vectorized dataset...")
     # We only need the regex features, but the factory computes them alongside embeddings if we use get_vectorized_dataset.
