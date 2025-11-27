@@ -104,7 +104,7 @@ class Trainer:
         logger.info(f"Number of classes: {self.num_classes}")
 
         # Initialize Evaluator
-        self.evaluator = Evaluator(self.num_classes)
+        self.evaluator = Evaluator(self.num_classes, class_names=self.class_names)
 
     def setup_models(self):
         logger.info(f"Initializing {self.config.model_class}...")
@@ -199,6 +199,7 @@ class Trainer:
         self.classifier.eval()
         total_loss = 0.0
         all_preds = []
+        all_probs = []
         all_targets = []
 
         with torch.no_grad():
@@ -225,8 +226,12 @@ class Trainer:
                 loss = self.loss_fn(logits, labels)
                 total_loss += loss.item()
 
-                # Predictions for metrics (sigmoid > 0.5)
-                preds = (torch.sigmoid(logits) > 0.5).float()
+                # Probabilities
+                probs = torch.sigmoid(logits)
+                # Predictions (threshold 0.5)
+                preds = (probs > 0.5).float()
+
+                all_probs.append(probs.cpu().numpy())
                 all_preds.append(preds.cpu().numpy())
                 all_targets.append(labels.cpu().numpy())
 
@@ -234,6 +239,7 @@ class Trainer:
 
         # Concatenate
         all_preds_arr = np.vstack(all_preds)
+        all_probs_arr = np.vstack(all_probs)
         all_targets_arr = np.vstack(all_targets)
 
         # Compute Metrics using Evaluator
@@ -243,6 +249,7 @@ class Trainer:
         self.logger.log_metrics(metrics, step=epoch)
         return {
             "preds": all_preds_arr,
+            "probs": all_probs_arr,
             "targets": all_targets_arr,
             "val_loss": avg_loss,
             **metrics,
@@ -274,8 +281,17 @@ class Trainer:
                 best_val_loss = val_results["val_loss"]
                 # Save best model logic here if needed
 
-            # Plot confusion matrix at the end
+            # Plot artifacts at the end
             if epoch == self.config.num_epochs:
-                self.evaluator.plot_confusion_matrix(
-                    val_results["targets"], val_results["preds"]
+                self.evaluator.plot_global_confusion_matrix(
+                    val_results["targets"], val_results["preds"], tags=tags
+                )
+                self.evaluator.plot_roc_curve(
+                    val_results["targets"], val_results["probs"], tags=tags
+                )
+                self.evaluator.plot_pr_curve(
+                    val_results["targets"], val_results["probs"], tags=tags
+                )
+                self.evaluator.save_per_class_metrics(
+                    val_results["targets"], val_results["preds"], tags=tags
                 )
