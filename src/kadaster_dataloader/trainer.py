@@ -10,13 +10,13 @@ from loguru import logger
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from kadaster_dataloader.dataset import DatasetFactory
-from kadaster_dataloader.evaluation import Evaluator
-from kadaster_dataloader.logging import (CompositeLogger, ConsoleLogger,
-                                         MLFlowLogger)
-from kadaster_dataloader.model import (HybridClassifier, NeuralClassifier,
-                                       TextVectorizer)
-from kadaster_dataloader.regex_model import RegexGenerator, RegexVectorizer
+from kadaster_dataloader.datasets.dataset import DatasetFactory
+from kadaster_dataloader.models.regex import RegexGenerator, RegexVectorizer
+from kadaster_dataloader.models.text import (HybridClassifier,
+                                             NeuralClassifier, TextVectorizer)
+from kadaster_dataloader.utils.evaluation import Evaluator
+from kadaster_dataloader.utils.logging import (CompositeLogger, ConsoleLogger,
+                                               MLFlowLogger)
 
 
 def get_default_device() -> str:

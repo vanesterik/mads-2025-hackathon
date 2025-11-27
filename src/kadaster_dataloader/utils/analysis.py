@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from loguru import logger
 
-from kadaster_dataloader.dataset import RechtsfeitDataset
+from kadaster_dataloader.datasets.dataset import RechtsfeitDataset
 
 
 def analyze_label_distribution(dataset: RechtsfeitDataset) -> Dict[str, int]:

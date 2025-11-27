@@ -194,7 +194,7 @@ class DatasetFactory:
         If regex_vectorizer is provided, also computes regex features.
         Results are cached to disk.
         """
-        from kadaster_dataloader.utils import load_or_compute_tensor
+        from kadaster_dataloader.utils.tensor import load_or_compute_tensor
 
         vectorized_datasets = {}
         splits = ["train", "test"]

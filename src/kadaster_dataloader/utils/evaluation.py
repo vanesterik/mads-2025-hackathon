@@ -203,3 +203,70 @@ class Evaluator:
         plt.savefig(output_path)
         plt.close()
         logger.info(f"Global confusion matrix saved to {output_path}")
+
+    def evaluate_regex_performance(
+        self,
+        regex_features: np.ndarray,
+        true_labels: np.ndarray,
+        regex_map: Dict[int, str],
+        code2idx: Dict[int, int],
+        output_path: str,
+    ):
+        """
+        Evaluates regex performance per code and saves to CSV.
+        """
+        logger.info("Evaluating regex performance...")
+
+        # True Positives: both are 1
+        tp = (regex_features * true_labels).sum(axis=0)
+        # False Positives: regex is 1, true is 0
+        fp = (regex_features * (1 - true_labels)).sum(axis=0)
+        # False Negatives: regex is 0, true is 1
+        fn = ((1 - regex_features) * true_labels).sum(axis=0)
+
+        # Support (number of true instances)
+        support = true_labels.sum(axis=0)
+
+        metrics_data = []
+
+        # Iterate over classes in the encoder
+        for code, idx in code2idx.items():
+            t = tp[idx]
+            f = fp[idx]
+            n = fn[idx]
+            s = support[idx]
+
+            precision = t / (t + f) if (t + f) > 0 else 0.0
+            recall = t / (t + n) if (t + n) > 0 else 0.0
+            f1 = (
+                2 * (precision * recall) / (precision + recall)
+                if (precision + recall) > 0
+                else 0.0
+            )
+
+            metrics_data.append(
+                {
+                    "code": code,
+                    "count": int(s),
+                    "precision": f"{precision:.5f}",
+                    "recall": f"{recall:.5f}",
+                    "f1": f"{f1:.5f}",
+                    "tp": int(t),
+                    "fp": int(f),
+                    "fn": int(n),
+                    "regex": regex_map.get(code, "N/A"),
+                }
+            )
+
+        df = pd.DataFrame(metrics_data)
+        df.sort_values("f1", ascending=False, inplace=True)
+
+        logger.info(f"Saving results to {output_path}")
+        df.to_csv(output_path, index=False)
+        logger.info("\nTop 10 Regexes by F1 Score:")
+        logger.info(
+            "\n"
+            + df.head(10)[
+                ["code", "count", "f1", "precision", "recall", "regex"]
+            ].to_string()
+        )

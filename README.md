@@ -15,14 +15,14 @@ A utility for loading and processing Kadaster datasets, specifically designed fo
 ### 1. Analysis
 Generate a label distribution plot to understand the dataset balance.
 ```bash
-python main.py analyze
+uv run python -m kadaster_dataloader.cli analyze
 ```
 Output: `artifacts/img/label_distribution.png`
 
 ### 2. Regex Evaluation
 Evaluate the performance of the regex-based model on the training set.
 ```bash
-python main.py evaluate-regex
+uv run python -m kadaster_dataloader.cli evaluate-regex
 ```
 Output: `artifacts/csv/regex_evaluation.csv`
 
@@ -31,17 +31,17 @@ Train the model. You can choose between the simple BERT classifier or the Hybrid
 
 **Neural Classifier (BERT only):**
 ```bash
-python main.py train --model-class NeuralClassifier --epochs 5 --model-name prajjwal1/bert-mini
+uv run python -m kadaster_dataloader.cli train --model-class NeuralClassifier --epochs 5 --model-name prajjwal1/bert-mini
 ```
 
 **Hybrid Classifier (BERT + Regex):**
 ```bash
-python main.py train --model-class HybridClassifier --epochs 5 --model-name prajjwal1/bert-mini
+uv run python -m kadaster_dataloader.cli train --model-class HybridClassifier --epochs 5 --model-name prajjwal1/bert-mini
 ```
 
 **Regex Only Classifier:**
 ```bash
-python main.py train --model-class RegexOnlyClassifier --epochs 5
+uv run python -m kadaster_dataloader.cli train --model-class RegexOnlyClassifier --epochs 5
 ```
 
 ## Architecture
