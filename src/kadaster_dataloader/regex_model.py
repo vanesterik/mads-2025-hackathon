@@ -7,6 +7,11 @@ from loguru import logger
 
 
 class RegexGenerator:
+    """
+    Based on a CSV file with code and description,
+    this class automatically generate regex patterns for each code.
+    """
+
     def __init__(self, csv_path: str):
         self.csv_path = csv_path
         self.regexes: Dict[int, str] = {}
@@ -45,33 +50,60 @@ class RegexGenerator:
 
         logger.info(f"Generated {len(self.regexes)} regex patterns.")
 
+    def generate_hash(self) -> str:
+        """
+        Generates a hash so we can spot changes in the regex patterns.
+        This helps with caching
+        """
+        import hashlib
+
+        # Sort by code to ensure stability
+        sorted_items = sorted(self.regexes.items())
+        # Create a string representation
+        repr_str = str(sorted_items)
+        # Hash it
+        return hashlib.md5(repr_str.encode()).hexdigest()[:8]
+
     def _create_pattern(self, description: str) -> str:
         """
         Converts a description into a flexible regex pattern.
         """
-        # Escape special regex characters first
-        escaped = re.escape(description)
+        # Handle "enz." (etc.) - remove it
+        clean_desc = description.replace("enz.", "").strip()
 
-        # Handle "enz." (etc.) - remove it or make it optional
-        escaped = escaped.replace(r"enz\.", "")
+        # Logic: If parentheses exist,
+        # eg mandeligheid (wijziging)
+        # we treat the parts inside and outside as separate required components.
+        # We assume the order in the description matters
+        # So we use "part1.*part2" which is much faster than lookaheads.
+        if "(" in clean_desc and ")" in clean_desc:
+            # Split by parens
+            parts = re.split(r"[\(\)]", clean_desc)
+            # Filter empty and strip
+            parts = [p.strip() for p in parts if p.strip()]
 
-        # Handle parentheses: make content within () optional
-        # A simple approach: replace '\(' with '(?:' and '\)' with ')?'
-        # This assumes balanced parens in the description.
-        pattern = escaped.replace(r"\(", r"(?:").replace(r"\)", r")?")
+            pattern_parts = []
+            for p in parts:
+                escaped = re.escape(p)
+                # Flexible whitespace
+                escaped = escaped.replace(r"\ ", r"\s+")
+                pattern_parts.append(escaped)
 
-        # Handle "art." and "BW" / "WVG"
-        # Maybe make whitespace flexible?
-        pattern = pattern.replace(r"\ ", r"\s+")
+            # Combine with .* to match in order, allowing anything in between
+            pattern = ".*".join(pattern_parts)
+        else:
+            # Standard handling
+            escaped = re.escape(clean_desc)
+            # Flexible whitespace
+            pattern = escaped.replace(r"\ ", r"\s+")
 
-        # Case insensitive flag will be used in compilation
         return pattern
 
 
 class RegexClassifier:
     def __init__(self, generator: RegexGenerator):
         self.patterns = {
-            code: re.compile(pattern, re.IGNORECASE)
+            code: re.compile(pattern, re.IGNORECASE | re.DOTALL)
             for code, pattern in generator.regexes.items()
         }
 
@@ -79,54 +111,48 @@ class RegexClassifier:
         """
         Returns a list of codes found in the text.
         """
-        found_codes = []
+        matches = []
         for code, pattern in self.patterns.items():
             if pattern.search(text):
-                found_codes.append(code)
-        return found_codes
+                matches.append(code)
+        return matches
 
 
 class RegexVectorizer:
     def __init__(self, generator: RegexGenerator, label_encoder=None):
+        self.generator = generator
+        self.hash = generator.generate_hash()
+
         """
         Args:
             generator: The RegexGenerator instance.
-            label_encoder: Optional LabelEncoder. If provided, the vectorizer will
-                           only use patterns for codes present in the encoder and
-                           will align the output vector with the encoder's indices.
+            label_encoder: Optional LabelEncoder to align outputs with model classes.
         """
+        self.output_dim = 0
+        self.code_to_idx = {}
         # Use the simple regexes (code -> pattern)
         self.patterns = {}
 
-        if label_encoder:
-            # Single Source of Truth: Use the encoder's codes and indices
-            self.code_to_idx = label_encoder.code2idx
-            self.output_dim = len(label_encoder)
+        if label_encoder is None:
+            logger.error(
+                "LabelEncoder is required for RegexVectorizer to align with model classes."
+            )
+            raise ValueError("LabelEncoder is required.")
 
-            # Only compile patterns for codes that are in the encoder (and have a regex)
-            for code_str, idx in self.code_to_idx.items():
-                # Encoder keys are strings, generator keys might be ints
-                try:
-                    code_int = int(code_str)
-                    if code_int in generator.regexes:
-                        self.patterns[idx] = re.compile(
-                            generator.regexes[code_int], re.IGNORECASE
-                        )
-                except ValueError:
-                    continue
-        else:
-            # Fallback to using all regexes sorted by code
-            for code, pattern in generator.regexes.items():
-                self.patterns[code] = re.compile(pattern, re.IGNORECASE)
+        # Single Source of Truth: Use the encoder's codes and indices
+        self.code_to_idx = label_encoder.code2idx
+        self.output_dim = len(label_encoder)
 
-            self.sorted_codes = sorted(self.patterns.keys())
-            self.code_to_idx = {code: i for i, code in enumerate(self.sorted_codes)}
-            self.output_dim = len(self.sorted_codes)
-
-            # Remap patterns to use the new index directly for faster lookup in forward
-            self.patterns = {
-                self.code_to_idx[code]: pat for code, pat in self.patterns.items()
-            }
+        # Only compile patterns for codes that are in the encoder (and have a regex)
+        for code_str, idx in self.code_to_idx.items():
+            try:
+                code_int = int(code_str)
+                if code_int in generator.regexes:
+                    self.patterns[idx] = re.compile(
+                        generator.regexes[code_int], re.IGNORECASE | re.DOTALL
+                    )
+            except ValueError:
+                continue
 
     def _match_text(self, text: str) -> List[int]:
         """Helper for parallel processing: returns list of indices that matched."""
