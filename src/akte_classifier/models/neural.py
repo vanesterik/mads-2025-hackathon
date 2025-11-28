@@ -62,7 +62,7 @@ class NeuralClassifier(nn.Module):
     A simple neural network for classification.
     """
 
-    def __init__(self, input_dim: int, num_classes: int, hidden_dim: int = 256):
+    def __init__(self, input_dim: int, num_classes: int, hidden_dim: int = 128):
         super().__init__()
         self.sequential = nn.Sequential(
             nn.Linear(input_dim, hidden_dim),
@@ -87,7 +87,7 @@ class HybridClassifier(nn.Module):
     """
 
     def __init__(
-        self, input_dim: int, regex_dim: int, num_classes: int, hidden_dim: int = 256
+        self, input_dim: int, regex_dim: int, num_classes: int, hidden_dim: int = 128
     ):
         super().__init__()
 

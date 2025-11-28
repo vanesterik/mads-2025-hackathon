@@ -43,6 +43,7 @@ def train(
     epochs: int = typer.Option(10, help="Number of epochs"),
     batch_size: int = typer.Option(32, help="Batch size"),
     learning_rate: float = typer.Option(1e-3, help="Learning rate"),
+    hidden_dim: int = typer.Option(256, help="Hidden layer dimension"),
     device: Optional[str] = None,
 ):
     """
@@ -58,6 +59,7 @@ def train(
         model_name=model_name,
         learning_rate=learning_rate,
         use_regex=use_regex,
+        hidden_dim=hidden_dim,
     )
     if device:
         config.device = device

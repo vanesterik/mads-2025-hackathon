@@ -1,6 +1,6 @@
 import os
 from dataclasses import asdict, dataclass
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 import torch
@@ -42,6 +42,9 @@ class TrainingConfig:
     device: str = get_default_device()
     model_class: str = "HybridClassifier"  # Default to Hybrid
     use_regex: bool = True  # Whether to use regex features
+    hidden_dim: int = 256  # Hidden layer dimension
+    max_length: Optional[int] = None  # Max token length (None = auto)
+    pooling: str = "mean"  # Pooling strategy: "mean" or "cls"
 
 
 class Trainer:
@@ -75,7 +78,11 @@ class Trainer:
 
         # Initialize Text Vectorizer
         if self.config.model_class in ["NeuralClassifier", "HybridClassifier"]:
-            self.vectorizer = TextVectorizer(self.config.model_name)
+            self.vectorizer = TextVectorizer(
+                self.config.model_name,
+                max_length=self.config.max_length,
+                pooling=self.config.pooling,
+            )
             self.vectorizer.model.to(self.device)
             for param in self.vectorizer.model.parameters():
                 param.requires_grad = False
@@ -115,13 +122,16 @@ class Trainer:
 
         if self.config.model_class == "NeuralClassifier":
             self.classifier = NeuralClassifier(
-                input_dim=self.vectorizer.hidden_size, num_classes=self.num_classes
+                input_dim=self.vectorizer.hidden_size,
+                num_classes=self.num_classes,
+                hidden_dim=self.config.hidden_dim,
             )
         elif self.config.model_class == "HybridClassifier":
             self.classifier = HybridClassifier(
                 input_dim=self.vectorizer.hidden_size,
                 regex_dim=self.regex_vectorizer.output_dim,
                 num_classes=self.num_classes,
+                hidden_dim=self.config.hidden_dim,
             )
         elif self.config.model_class == "RegexOnlyClassifier":
             # Ensure regex vectorizer is available
@@ -133,6 +143,7 @@ class Trainer:
             self.classifier = NeuralClassifier(
                 input_dim=self.regex_vectorizer.output_dim,
                 num_classes=self.num_classes,
+                hidden_dim=self.config.hidden_dim,
             )
         else:
             raise ValueError(f"Unknown model class: {self.config.model_class}")
