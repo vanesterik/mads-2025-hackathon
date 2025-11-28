@@ -44,7 +44,7 @@ class TrainingConfig:
     use_regex: bool = True  # Whether to use regex features
     hidden_dim: int = 256  # Hidden layer dimension
     max_length: Optional[int] = None  # Max token length (None = auto)
-    pooling: str = "mean"  # Pooling strategy: "mean" or "cls"
+    pooling: Optional[str] = None  # Pooling strategy: "mean", "cls", or None (auto)
 
 
 class Trainer:

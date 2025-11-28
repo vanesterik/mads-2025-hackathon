@@ -44,6 +44,12 @@ def train(
     batch_size: int = typer.Option(32, help="Batch size"),
     learning_rate: float = typer.Option(1e-3, help="Learning rate"),
     hidden_dim: int = typer.Option(256, help="Hidden layer dimension"),
+    max_length: Optional[int] = typer.Option(
+        None, help="Max token length (None = auto)"
+    ),
+    pooling: Optional[str] = typer.Option(
+        None, help="Pooling strategy: 'mean', 'cls', or None (auto)"
+    ),
     device: Optional[str] = None,
 ):
     """
@@ -51,7 +57,7 @@ def train(
     """
     # set use_regex=True if HybridClassifier or RegexOnlyClassifier is selected
     use_regex = model_class in ["HybridClassifier", "RegexOnlyClassifier"]
-    logger.info("Starting training...")
+    logger.info("\n\n ======= Starting training =======")
     config = TrainingConfig(
         num_epochs=epochs,
         batch_size=batch_size,
@@ -60,12 +66,15 @@ def train(
         learning_rate=learning_rate,
         use_regex=use_regex,
         hidden_dim=hidden_dim,
+        max_length=max_length,
+        pooling=pooling,
     )
     if device:
         config.device = device
 
     trainer = Trainer(config)
     trainer.run()
+    logger.success("\n\n ======= Training completed =======")
 
 
 @app.command()

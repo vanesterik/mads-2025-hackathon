@@ -72,14 +72,37 @@ If you run
 kadaster train --model-class RegexOnlyClassifier --epochs 5
 ``` 
 this will:
-- 
+-  load the regex vectorizer which serve as binary features $\{0,1\}^{d}$
+-  train the `NeuralClassifier` from [neural.py](src/akte_classifier/models/neural.py) 
+
+### 3.3 Text Vectorizers
+
+The `NeuralClassifier` and `HybridClassifier` use a `TextVectorizer` to convert text into embeddings. From huggingface, we can download pre-trained text vectorizers.
+For example, we can use [prajjwal1/bert-tiny](https://huggingface.co/prajjwal1/bert-tiny)
+
+```bash
+kadaster train --model-class NeuralClassifier--model-name prajjwal1/bert-tiny --epochs 10
+```
+This command will use the NeuralClassifier approach, download the prajjwal1/bert-tiny model as a vectorizer, and train for 10 epochs.
+
+- **Dynamic Max Length**: The vectorizer tries to automatically detect the model's maximum context length (e.g., typically512 for BERT, 8192 for BGE-M3 models). This sometimes fails, so check the logs. You can override this with `--max-length 512` or `--max-length 4000`, for example
+- **Automatic Pooling**: The vectorizer automatically detects the optimal pooling strategy (`cls` or `mean`) from the model's configuration. You can override this with `--pooling cls` or `--pooling mean`.
+
+General heuristics:
+- BERT-based models (like bert-base-uncased) often work well with Mean Pooling.
+- Sentence-BERT models (sbert) are typically trained with Mean Pooling.
+- Newer Embedding models (like bge, e5) often use CLS Pooling because it's more efficient for retrieval tasks.
+
+Example:
+```bash
+kadaster train --model-name BAAI/bge-m3 --pooling cls --max-length 512
+```
+
 
 
 
 
 ### 3.2 TextVectorizers
-From huggingface, we can download pre-trained text vectorizers.
-For example, we can use [prajjwal1/bert-tiny](https://huggingface.co/prajjwal1/bert-tiny)
 
 
 **Regex Only Classifier:**

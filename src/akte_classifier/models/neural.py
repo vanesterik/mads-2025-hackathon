@@ -1,5 +1,8 @@
+import json
+
 import torch
 import torch.nn as nn
+from huggingface_hub import hf_hub_download
 from loguru import logger
 from transformers import AutoModel, AutoTokenizer
 
@@ -9,20 +12,91 @@ class TextVectorizer:
     Wraps a HuggingFace model to vectorize text.
     """
 
-    def __init__(self, model_name: str):
+    def __init__(
+        self, model_name: str, max_length: int | None = None, pooling: str | None = None
+    ):
         self.model_name = model_name
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
         self.model = AutoModel.from_pretrained(model_name)
         self.model.eval()  # Set to eval mode by default
 
+        if pooling is None:
+            self.pooling = self._detect_pooling_strategy(model_name)
+        else:
+            self.pooling = pooling
+
+        # Determine max_length
+        if max_length is not None:
+            self.max_length = max_length
+        else:
+            # Try to get from tokenizer
+            model_max_len = self.tokenizer.model_max_length
+            # HuggingFace tokenizers often return a very large int if not set
+            # We treat anything > 10000 as "infinite"/unset and fallback to 512
+            if model_max_len > 10000:
+                logger.warning(
+                    f"Tokenizer model_max_length is {model_max_len}, falling back to 512. "
+                    "Specify max_length explicitly if needed."
+                )
+                self.max_length = 512
+            else:
+                self.max_length = model_max_len
+
+        logger.info(
+            f"TextVectorizer initialized with max_length={self.max_length}, pooling={self.pooling}"
+        )
+
+    def _detect_pooling_strategy(self, model_name: str) -> str:
+        """
+        Attempts to detect the pooling strategy from the model's configuration.
+        """
+        try:
+            # Download modules.json
+            path = hf_hub_download(model_name, "modules.json")
+            with open(path) as f:
+                modules = json.load(f)
+
+            # Look for the pooling module
+            for module in modules:
+                if module["type"] == "sentence_transformers.models.Pooling":
+                    # Download the pooling config
+                    config_path = hf_hub_download(
+                        model_name, f"{module['path']}/config.json"
+                    )
+                    with open(config_path) as f:
+                        config = json.load(f)
+
+                    if config.get("pooling_mode_cls_token"):
+                        logger.success(
+                            f"Auto-detected pooling strategy: cls (from {model_name})"
+                        )
+                        return "cls"
+                    if config.get("pooling_mode_mean_tokens"):
+                        logger.success(
+                            f"Auto-detected pooling strategy: mean (from {model_name})"
+                        )
+                        return "mean"
+        except Exception:
+            # Fail silently on network errors or missing files
+            pass
+
+        logger.warning(
+            f"Could not detect pooling strategy for {model_name}, defaulting to 'mean'. "
+            "Please check the model card to see if 'cls' pooling is required."
+        )
+        return "mean"
+
     def forward(self, texts: list[str]) -> torch.Tensor:
         """
         Encodes a list of texts into vectors.
-        Uses mean pooling of the last hidden state.
         """
         # Tokenize
         inputs = self.tokenizer(
-            texts, padding=True, truncation=True, max_length=512, return_tensors="pt"
+            texts,
+            padding=True,
+            truncation=True,
+            max_length=self.max_length,
+            return_tensors="pt",
         )
 
         # Move inputs to the same device as the model
@@ -33,7 +107,11 @@ class TextVectorizer:
         with torch.no_grad():
             outputs = self.model(**inputs)
 
-        # Mean pooling
+        if self.pooling == "cls":
+            # CLS token is usually the first token
+            return outputs.last_hidden_state[:, 0, :]
+
+        # Default to mean pooling
         # batches of text are padded such that they have the same length,
         # however, the padding tokens are zero and we dont want to include them in the mean
         attention_mask = inputs["attention_mask"]
