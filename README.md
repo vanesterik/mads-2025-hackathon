@@ -76,12 +76,12 @@ kadaster train --model-class RegexOnlyClassifier --epochs 5
 
 **Neural Classifier (BERT only):**
 ```bash
-kadaster train --model-class NeuralClassifier --epochs 5 --model-name prajjwal1/bert-mini
+kadaster train --model-class NeuralClassifier --epochs 5 --model-name prajjwal1/bert-tiny
 ```
 
 **Hybrid Classifier (BERT + Regex):**
 ```bash
-kadaster train --model-class HybridClassifier --epochs 5 --model-name prajjwal1/bert-mini
+kadaster train --model-class HybridClassifier --epochs 5 --model-name prajjwal1/bert-tiny
 ```
 
 
@@ -113,7 +113,7 @@ $$
 
 To optimize performance, the system caches vectorized features in `artifacts/vectorcache/`.
 
-*   **Embeddings**: Cached based on the model name (e.g., `prajjwal1_bert-mini_train_embeddings.pt`).
+*   **Embeddings**: Cached based on the model name (e.g., `prajjwal1_bert-tiny_train_embeddings.pt`).
 *   **Regex Features**: Cached based on a **hash of the regex patterns** (e.g., `regex_f66bce0c_train.pt`).
 
 This ensures that if you modify the regex logic or the CSV file, the hash changes, invalidating the cache and forcing a recomputation.

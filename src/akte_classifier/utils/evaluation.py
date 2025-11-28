@@ -31,12 +31,12 @@ class Evaluator:
         if not tags:
             return f"artifacts/{folder}/{base_name}.{ext}"
 
-        # Construct suffix from tags (e.g. _bert-mini_f66bce0c)
+        # Construct suffix from tags (e.g. _bert-tiny_f66bce0c)
         # We prioritize regex_hash if present, then text_model_name
         parts = [base_name]
 
         if "text_model_name" in tags:
-            # Clean model name (prajjwal1/bert-mini -> prajjwal1_bert-mini)
+            # Clean model name (prajjwal1/bert-tiny -> prajjwal1_bert-tiny)
             clean_name = tags["text_model_name"].replace("/", "_")
             parts.append(clean_name)
 
