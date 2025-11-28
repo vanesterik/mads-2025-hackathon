@@ -41,7 +41,7 @@ As you can see, the dataset is highly imbalanced. This has consequences for your
 ### 3.1. Regexes
 In [regex.py](src/akte_classifier/models/regex.py), you will find a very simple approach:
 - `RegexGenerator`: this will read the rechtsfeiten.csv and will automatically generate regexes based on the description. This is in no way finished, so there is a lot to improve here! 
-- `RegexVectorizer`: this uses the regexes to create a binary vector for each document: $f\colon \mathcal{T} \to \{0,1\}^{d}$ where $\mathcal{T}$ is the set of documents and $d$ is the number of classes in our training set.
+- `RegexVectorizer`: this uses the regexes to create a binary vector for each document: $f\colon \mathcal{T} \to \{0,1\}^{C}$ where $\mathcal{T}$ is the set of documents and $C$ is the number of classes in our training set.
 - In the [evaluation.py](src/akte_classifier/utils/evaluation.py), you will find a function to evaluate the performance of the regex vector. This is very simple; if the regex matches, it is a 1, otherwise a 0.
 
 you can run
@@ -65,14 +65,14 @@ For example, the code 621 occurs only 2 times in the data, and this regex has a 
 This should guide you to see how usefull your regexes are, but also helps you invest your time wisely (working on a regex that can only find 2 items in a dataset of about 20k wont have much impact)
 
 ### 3.2 Regex with NN
-A very simple way to improve the regex is to take the binary-regex-vector as input, and compose the vectorizer with a basic neural network that does $g\colon \{0,1\}^{d} \to \mathbb{R}^{d}$ where the outputvector are logits and $d$ is the number of classes in our training set.
+A very simple way to improve the regex is to take the binary-regex-vector as input, and compose the vectorizer with a basic neural network that does $g\colon \{0,1\}^{C} \to \mathbb{R}^{C}$ where the outputvector are logits and $C$ is the number of classes in our training set.
 
 If you run
 ```bash
 kadaster train --model-class RegexOnlyClassifier --epochs 5
 ``` 
 this will:
--  load the regex vectorizer which serve as binary features $\{0,1\}^{d}$
+-  load the regex vectorizer which serve as binary features $\{0,1\}^{C}$
 -  train the `NeuralClassifier` from [neural.py](src/akte_classifier/models/neural.py) 
 
 ### 3.3 Text Vectorizers
@@ -93,57 +93,14 @@ General heuristics:
 - Sentence-BERT models (sbert) are typically trained with Mean Pooling.
 - Newer Embedding models (like bge, e5) often use CLS Pooling because it's more efficient for retrieval tasks.
 
-Example:
-```bash
-kadaster train --model-name BAAI/bge-m3 --pooling cls --max-length 512
-```
+### 3.4 Hybrid Approach
 
+We can combine these two approaches by using a `HybridClassifier`.
 
-
-
-
-### 3.2 TextVectorizers
-
-
-**Regex Only Classifier:**
-```bash
-kadaster train --model-class RegexOnlyClassifier --epochs 5
-```
-
-**Neural Classifier (BERT only):**
-```bash
-kadaster train --model-class NeuralClassifier --epochs 5 --model-name prajjwal1/bert-tiny
-```
-
-**Hybrid Classifier (BERT + Regex):**
-```bash
-kadaster train --model-class HybridClassifier --epochs 5 --model-name prajjwal1/bert-tiny
-```
-
-
-## Architecture
-
-The system uses a **Hybrid Architecture** that combines deep learning embeddings with symbolic regex features.
-
-We can view the models as functors mapping from the space of text documents $\mathcal{T}$ to vector spaces $\mathbb{R}^d$.
-
-$$
-\begin{aligned}
-v_{bert} &= f_{bert}(t) \in \mathbb{R}^{768} \\
-v_{regex} &= f_{regex}(t) \in \{0,1\}^{166} \\
-v_{combined} &= [v_{bert}, v_{regex}] \in \mathbb{R}^{934} \\
-\hat{y} &= \text{softmax}(\text{MLP}(v_{combined}))
-\end{aligned}
-$$
-
-1.  **Text Vectorizer**: Maps text to a dense semantic space.
-    $$ f_{bert}: \mathcal{T} \to \mathbb{R}^{768} $$
-2.  **Regex Vectorizer**: Maps text to a sparse symbolic space (binary features).
-    $$ f_{regex}: \mathcal{T} \to \{0, 1\}^{166} $$
-3.  **Hybrid Combination**: We construct a product space by concatenating the vectors.
-    $$ f_{hybrid}(t) = f_{bert}(t) \oplus f_{regex}(t) \in \mathbb{R}^{768+166} $$
-4.  **Classification**: A Multi-Layer Perceptron (MLP) maps the combined features to class probabilities.
-    $$ f_{mlp}: \mathbb{R}^{934} \to [0, 1]^{NumClasses} $$
+- regex vectorizer does $f\colon \mathcal{T} \to \{0,1\}^{d_r}$ with $d_r$ the dimension of the regex vectorizer
+- text vectorizer does $g\colon \mathcal{T} \to \mathbb{R}^{d_v}$ with $d_v$ the dimension of the text vectorizer
+- we then concatenate the two vectors: $h\colon \mathcal{T} \to \mathbb{R}^{d_r + d_v}$
+- finally, we add a neural network $m\colon \mathbb{R}^{d_{r} + d_{v}} \to \mathbb{R}^{C}$ where $C$ is the number of classes in our training set
 
 ## Caching & Versioning
 
@@ -173,5 +130,3 @@ To log to a remote MLFlow server (e.g., provided by your instructor):
     MLFLOW_TRACKING_URI=http://<host-ip>:5000
     ```
 2.  Run your training commands as usual. The logs will automatically be sent to the server.
-
-curl -sSL https://raw.githubusercontent.com/raoulg/private-data-hosting/refs/heads/main/download_data.sh | bash -s -- -o data/raw
