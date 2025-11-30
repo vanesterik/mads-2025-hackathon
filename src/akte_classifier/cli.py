@@ -128,13 +128,23 @@ def train(
         "kadaster_experiment", help="MLFlow experiment name"
     ),
     device: Optional[str] = None,
+    csv_path: str = typer.Option(
+        "assets/rechtsfeiten.csv", help="Path to CSV file with regex patterns"
+    ),
+    patience: int = typer.Option(3, help="Early stopping patience"),
+    min_delta: float = typer.Option(0.0, help="Early stopping min delta"),
 ):
     """
-    Train the model.
+    Train a classifier model.
     """
     # set use_regex=True if HybridClassifier or RegexOnlyClassifier is selected
     use_regex = model_class in ["HybridClassifier", "RegexOnlyClassifier"]
     logger.info("\n\n ======= Starting training =======")
+    from akte_classifier.trainer import get_default_device
+
+    if device is None:
+        device = get_default_device()
+
     config = TrainingConfig(
         data_path=data_path,
         num_epochs=epochs,
@@ -147,9 +157,11 @@ def train(
         max_length=max_length,
         pooling=pooling,
         experiment_name=experiment_name,
+        csv_path=csv_path,
+        patience=patience,
+        min_delta=min_delta,
+        device=device,
     )
-    if device:
-        config.device = device
 
     trainer = Trainer(config)
     trainer.run()

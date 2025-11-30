@@ -20,6 +20,7 @@ from akte_classifier.models.neural import (HybridClassifier, NeuralClassifier,
 from akte_classifier.models.prompts import ClassificationPromptTemplate
 from akte_classifier.models.regex import RegexGenerator, RegexVectorizer
 from akte_classifier.utils.data import get_long_tail_labels, load_descriptions
+from akte_classifier.utils.early_stopping import EarlyStopping
 from akte_classifier.utils.evaluation import Evaluator
 from akte_classifier.utils.logging import (CompositeLogger, ConsoleLogger,
                                            MLFlowLogger)
@@ -53,12 +54,15 @@ class TrainingConfig:
     pooling: Optional[str] = None  # Pooling strategy: "mean", "cls", or None (auto)
     long_tail_threshold: Optional[int] = None  # Threshold for long-tail labels
     experiment_name: str = "kadaster_experiment"  # MLFlow experiment name
+    patience: int = 5
+    min_delta: float = 0.001
 
 
 class Trainer:
     def __init__(self, config: TrainingConfig):
         self.config = config
         self.device = torch.device(config.device)
+        logger.success(f"Using device: {self.device}")
         self.loaders: Dict[str, DataLoader] = {}
         self.num_classes = 0
         self.class_names: List[str] = []
@@ -80,6 +84,11 @@ class Trainer:
         self.best_model_path: Optional[str] = None
         self.best_codes_path: Optional[str] = None
         self.best_config_path: Optional[str] = None
+        self.run_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+        self.early_stopping = EarlyStopping(
+            patience=self.config.patience, verbose=True, delta=self.config.min_delta
+        )
 
     def get_data(self):
         logger.info("Initializing DatasetFactory...")
@@ -113,9 +122,6 @@ class Trainer:
                 regex_gen, label_encoder=factory.encoder
             )
 
-        # Instead of vectorizing the dataset every time
-        # which is a huge bottleneck, we can cache the
-        # vectorized dataset
         self.loaders = factory.get_vectorized_loader(
             self.vectorizer, self.regex_vectorizer
         )
@@ -305,35 +311,24 @@ class Trainer:
 
         self.logger.log_tags(tags)
 
-        best_val_loss = float("inf")
         logger.info("Start training...")
 
         for epoch in range(1, self.config.num_epochs + 1):
             self.train_epoch(epoch)
             val_results = self.validate(epoch)
 
-            if val_results["val_loss"] < best_val_loss:
-                best_val_loss = val_results["val_loss"]
+            # Early Stopping check
+            self.early_stopping(val_results["val_loss"])
 
-                # Delete previous best model if exists
-                if self.best_model_path and os.path.exists(self.best_model_path):
-                    os.remove(self.best_model_path)
-                    logger.info(f"Removed previous best model: {self.best_model_path}")
-
-                if self.best_codes_path and os.path.exists(self.best_codes_path):
-                    os.remove(self.best_codes_path)
-                    logger.info(f"Removed previous best codes: {self.best_codes_path}")
-
-                if self.best_config_path and os.path.exists(self.best_config_path):
-                    os.remove(self.best_config_path)
-                    logger.info(
-                        f"Removed previous best config: {self.best_config_path}"
-                    )
-
-                # Save new best model
+            if self.early_stopping.improved:
+                # Save new best model (overwrites existing file due to fixed timestamp)
                 self.best_model_path, self.best_codes_path, self.best_config_path = (
                     self.save_checkpoint(epoch, tags)
                 )
+
+            if self.early_stopping.early_stop:
+                logger.warning("Early stopping triggered!")
+                break
 
             # Plot artifacts at the end
             if epoch == self.config.num_epochs:
@@ -358,7 +353,7 @@ class Trainer:
         model_dir = "artifacts/models"
         os.makedirs(model_dir, exist_ok=True)
 
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        timestamp = self.run_timestamp
 
         # Construct model slug
         if self.config.model_class == "RegexOnlyClassifier":
@@ -500,46 +495,6 @@ class Trainer:
                     regex_feats = None
 
                 labels = labels.to(self.device)
-
-                # Forward pass
-                # Vectorize text on the fly if needed (though we cached embeddings, wait)
-                # The loader returns raw text if we used get_vectorized_loader?
-                # No, get_vectorized_loader returns TENSORS if we provided vectorizer.
-                # Let's check get_vectorized_loader implementation.
-                # It returns embeddings if vectorizer is provided.
-                # So 'texts' here are actually embeddings?
-                # Let's check Dataset __getitem__.
-                # VectorizedRechtsfeitDataset returns (embedding, regex, label) or (embedding, label).
-                # So 'texts' is actually 'embeddings'.
-
-                # Wait, if we are using NeuralClassifier, it expects embeddings?
-                # NeuralClassifier forward takes 'x'.
-                # HybridClassifier forward takes 'text_emb', 'regex_features'.
-
-                # So we don't need to call self.vectorizer here!
-                # The data is ALREADY vectorized.
-
-                # However, the original code had:
-                # emb = self.vectorizer(texts)
-                # This implies 'texts' were strings.
-
-                # But get_vectorized_loader was used.
-                # If get_vectorized_loader was used, the dataset yields pre-computed embeddings.
-
-                # Let's verify VectorizedRechtsfeitDataset.
-                # It yields self.embeddings[idx].
-
-                # So 'texts' IS the embedding tensor.
-
-                # BUT, if we look at the errors:
-                # src/akte_classifier/trainer.py:495: error: "None" not callable [misc]
-                # This corresponds to: emb = self.vectorizer(texts)
-
-                # If we are using pre-computed embeddings, we should NOT call vectorizer again.
-                # We should just use 'texts' as 'emb'.
-
-                # Let's assume the intention of 'get_vectorized_loader' is to return embeddings.
-                # So we should remove the vectorizer call.
 
                 emb = texts.to(self.device)
 
