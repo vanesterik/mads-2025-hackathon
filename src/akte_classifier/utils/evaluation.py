@@ -4,11 +4,9 @@ from typing import Dict, List, Optional
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import seaborn as sns
 from loguru import logger
-from sklearn.metrics import (auc, confusion_matrix, f1_score,
-                             precision_recall_curve, precision_score,
-                             recall_score, roc_curve)
+from sklearn.metrics import (auc, f1_score, precision_recall_curve,
+                             precision_score, recall_score, roc_curve)
 
 
 class Evaluator:
@@ -201,37 +199,64 @@ class Evaluator:
         plt.close()
         logger.success(f"PR curve saved to {output_path}")
 
-    def plot_global_confusion_matrix(
+    def plot_overview_metrics(
         self,
         targets: np.ndarray,
         preds: np.ndarray,
         tags: Optional[Dict[str, str]] = None,
     ):
         """
-        Plots a global 2x2 confusion matrix (TP/FP/FN/TN) across all classes.
+        Plots a bar chart of overall metrics (Precision, Recall, F1) for Micro and Macro averages.
         """
-        logger.info("Generating global confusion matrix...")
+        logger.info("Generating overview metrics plot...")
 
-        # Flatten to treat as binary classification problem
-        cm = confusion_matrix(targets.ravel(), preds.ravel())
+        metrics = {
+            "Micro Precision": precision_score(
+                targets, preds, average="micro", zero_division=0
+            ),
+            "Micro Recall": recall_score(
+                targets, preds, average="micro", zero_division=0
+            ),
+            "Micro F1": f1_score(targets, preds, average="micro", zero_division=0),
+            "Macro Precision": precision_score(
+                targets, preds, average="macro", zero_division=0
+            ),
+            "Macro Recall": recall_score(
+                targets, preds, average="macro", zero_division=0
+            ),
+            "Macro F1": f1_score(targets, preds, average="macro", zero_division=0),
+        }
 
-        # cm is [[TN, FP], [FN, TP]]
+        names = list(metrics.keys())
+        values = list(metrics.values())
 
-        plt.figure(figsize=(8, 6))
-        sns.heatmap(
-            cm,
-            annot=True,
-            fmt="d",
-            cmap="Blues",
-            xticklabels=["Predicted Negative", "Predicted Positive"],
-            yticklabels=["True Negative", "True Positive"],
+        plt.figure(figsize=(10, 6))
+        bars = plt.bar(
+            names,
+            values,
+            color=["#4c72b0", "#4c72b0", "#4c72b0", "#55a868", "#55a868", "#55a868"],
         )
-        plt.title("Global Confusion Matrix (All Classes Flattened)")
 
-        output_path = self._get_filename("global_confusion_matrix", tags, "png")
+        # Add value labels on top of bars
+        for bar in bars:
+            height = bar.get_height()
+            plt.text(
+                bar.get_x() + bar.get_width() / 2.0,
+                height,
+                f"{height:.3f}",
+                ha="center",
+                va="bottom",
+            )
+
+        plt.title("Overview Metrics (Micro vs Macro)")
+        plt.ylabel("Score")
+        plt.ylim(0, 1.1)  # Metrics are 0-1, give some space for labels
+        plt.grid(axis="y", linestyle="--", alpha=0.7)
+
+        output_path = self._get_filename("overview_metrics", tags, "png")
         plt.savefig(output_path)
         plt.close()
-        logger.success(f"Global confusion matrix saved to {output_path}")
+        logger.success(f"Overview metrics plot saved to {output_path}")
 
     def evaluate_regex_performance(
         self,

@@ -337,7 +337,7 @@ class Trainer:
 
             # Plot artifacts at the end
             if epoch == self.config.num_epochs:
-                self.evaluator.plot_global_confusion_matrix(
+                self.evaluator.plot_overview_metrics(
                     val_results["targets"], val_results["preds"], tags=tags
                 )
                 self.evaluator.plot_roc_curve(
@@ -587,9 +587,7 @@ class Trainer:
 
         assert self.evaluator is not None
         self.evaluator.save_per_class_metrics(all_targets_arr, all_preds_arr, tags=tags)
-        self.evaluator.plot_global_confusion_matrix(
-            all_targets_arr, all_preds_arr, tags=tags
-        )
+        self.evaluator.plot_overview_metrics(all_targets_arr, all_preds_arr, tags=tags)
         self.evaluator.plot_roc_curve(all_targets_arr, all_probs_arr, tags=tags)
         self.evaluator.plot_pr_curve(all_targets_arr, all_probs_arr, tags=tags)
         logger.success(f"Saved evaluation artifacts with {timestamp_prefix}")
