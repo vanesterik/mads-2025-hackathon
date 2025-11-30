@@ -21,7 +21,6 @@ def load_or_compute_tensor(
         The loaded or computed tensor.
     """
     if path.exists() and not force_recompute:
-        logger.info(f"Loading cached tensor from {path}...")
         try:
             tensor = torch.load(path)
             logger.success(f"Loaded cached tensor from {path}")

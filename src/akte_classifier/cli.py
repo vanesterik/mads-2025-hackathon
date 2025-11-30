@@ -35,6 +35,8 @@ def llm_classify(
     """
     from akte_classifier.trainer import LLMRunner
 
+    logger.info("\n\n ======= Starting LLM classification =======")
+
     runner = LLMRunner(
         threshold=threshold,
         limit=limit,
@@ -43,11 +45,49 @@ def llm_classify(
         max_length=max_length,
     )
     runner.run()
+    logger.success("\n\n ======= LLM classification completed ========")
+
+
+@app.command()
+def split_data(
+    data_path: str = "assets/aktes.jsonl",
+    output_dir: str = "assets",
+    test_size: float = typer.Option(0.1, help="Fraction of data to use for testing"),
+    seed: int = typer.Option(42, help="Random seed for splitting"),
+):
+    """
+    Split the dataset into train.jsonl and test.jsonl.
+    """
+    import os
+
+    from datasets import load_dataset
+
+    logger.info("\n\n ======= Starting data split =======")
+    dataset = load_dataset("json", data_files=data_path, split="train")
+    logger.success(f"Loaded dataset from {data_path}")
+
+    logger.info(f"Splitting dataset with test_size={test_size} and seed={seed}...")
+    split_ds = dataset.train_test_split(test_size=test_size, seed=seed)
+
+    train_ds = split_ds["train"]
+    test_ds = split_ds["test"]
+
+    os.makedirs(output_dir, exist_ok=True)
+    train_path = os.path.join(output_dir, "train.jsonl")
+    test_path = os.path.join(output_dir, "test.jsonl")
+
+    logger.info(f"Saving train set ({len(train_ds)} samples) to {train_path}...")
+    train_ds.to_json(train_path)
+
+    logger.info(f"Saving test set ({len(test_ds)} samples) to {test_path}...")
+    test_ds.to_json(test_path)
+
+    logger.success("\n\n ======= Data split completed =======")
 
 
 @app.command()
 def analyze(
-    data_path: str = "assets/aktes.jsonl",
+    data_path: str = "assets/train.jsonl",
 ):
     """
     Analyze the dataset and generate a label distribution plot.
@@ -55,15 +95,18 @@ def analyze(
     from akte_classifier.datasets.dataset import DatasetFactory
     from akte_classifier.utils.analysis import analyze_label_distribution
 
+    logger.info("\n\n ======= Starting dataset analysis =======")
     factory = DatasetFactory(data_path)
+    logger.success(f"Loaded dataset from {data_path}")
 
     assert factory.train_dataset is not None, "Train dataset is None"
     analyze_label_distribution(factory.train_dataset)
-    logger.success("Analysis Completed.")
+    logger.success("\n\n ======= Dataset analysis completed =======")
 
 
 @app.command()
 def train(
+    data_path: str = typer.Option("assets/train.jsonl", help="Path to training data"),
     model_class: str = typer.Option(
         "NeuralClassifier",
         help="Model class to use: NeuralClassifier, HybridClassifier, or RegexOnlyClassifier",
@@ -93,6 +136,7 @@ def train(
     use_regex = model_class in ["HybridClassifier", "RegexOnlyClassifier"]
     logger.info("\n\n ======= Starting training =======")
     config = TrainingConfig(
+        data_path=data_path,
         num_epochs=epochs,
         batch_size=batch_size,
         model_class=model_class,
@@ -114,7 +158,7 @@ def train(
 
 @app.command()
 def regex(
-    data_path: str = "assets/aktes.jsonl",
+    data_path: str = "assets/train.jsonl",
     csv_path: str = "assets/rechtsfeiten.csv",
     output_path: str = "artifacts/csv/regex_evaluation.csv",
 ):
@@ -127,8 +171,9 @@ def regex(
     from akte_classifier.models.regex import RegexVectorizer
     from akte_classifier.utils.evaluation import Evaluator
 
-    logger.info("Initializing DatasetFactory...")
+    logger.info("\n\n ======= Starting regex evaluation =======")
     factory = DatasetFactory(data_path)
+    logger.success(f"Loaded dataset from {data_path}")
 
     logger.info("Initializing Regex Model...")
     generator = RegexGenerator(csv_path)
@@ -161,6 +206,163 @@ def regex(
         code2idx=factory.encoder.code2idx,
         output_path=output_path,
     )
+
+
+@app.command()
+def eval(
+    eval_file: str = typer.Option(..., help="Path to file to evaluate"),
+    model_path: Optional[str] = typer.Option(
+        None, help="Path to saved model weights (.pt)"
+    ),
+    codes_path: Optional[str] = typer.Option(
+        None, help="Path to saved encoder codes (.json)"
+    ),
+    timestamp: Optional[str] = typer.Option(
+        None, help="Timestamp of the run to evaluate (e.g. 20251130_182204)"
+    ),
+    model_class: Optional[str] = typer.Option(
+        None,
+        help="Model class to use: NeuralClassifier, HybridClassifier, or RegexOnlyClassifier (auto-detected from config if not provided)",
+    ),
+    model_name: str = typer.Option(
+        "prajjwal1/bert-tiny", help="HuggingFace model name for text vectorization"
+    ),
+    batch_size: int = typer.Option(32, help="Batch size"),
+    hidden_dim: int = typer.Option(256, help="Hidden layer dimension"),
+    max_length: Optional[int] = typer.Option(
+        None, help="Max token length (None = auto)"
+    ),
+    pooling: Optional[str] = typer.Option(
+        None, help="Pooling strategy: 'mean', 'cls', or None (auto)"
+    ),
+    csv_path: str = typer.Option(
+        "assets/rechtsfeiten.csv", help="Path to label descriptions CSV"
+    ),
+    device: Optional[str] = None,
+):
+    """
+    Evaluate a trained model on a specific file.
+    """
+    import glob
+    import os
+
+    # Auto-detect model and codes if not provided
+    config_path = None
+
+    if timestamp:
+        model_dir = "artifacts/models"
+        # Search for files matching the timestamp
+        pt_files = glob.glob(os.path.join(model_dir, f"*_{timestamp}.pt"))
+        json_files = glob.glob(os.path.join(model_dir, f"*_{timestamp}_codes.json"))
+        config_files = glob.glob(os.path.join(model_dir, f"*_{timestamp}_config.json"))
+
+        if len(pt_files) == 1:
+            model_path = pt_files[0]
+            logger.info(f"Resolved model path from timestamp: {model_path}")
+        elif len(pt_files) > 1:
+            logger.error(
+                f"Ambiguous timestamp. Found {len(pt_files)} models matching {timestamp}."
+            )
+            raise typer.Exit(code=1)
+        else:
+            logger.error(f"No model found for timestamp {timestamp}.")
+            raise typer.Exit(code=1)
+
+        if len(json_files) == 1:
+            codes_path = json_files[0]
+            logger.info(f"Resolved codes path from timestamp: {codes_path}")
+
+        if len(config_files) == 1:
+            config_path = config_files[0]
+            logger.info(f"Resolved config path from timestamp: {config_path}")
+
+    elif not model_path or not codes_path:
+        model_dir = "artifacts/models"
+        pt_files = glob.glob(os.path.join(model_dir, "*.pt"))
+        json_files = glob.glob(os.path.join(model_dir, "*_codes.json"))
+        config_files = glob.glob(os.path.join(model_dir, "*_config.json"))
+
+        if len(pt_files) == 1 and len(json_files) == 1:
+            if not model_path:
+                model_path = pt_files[0]
+                logger.info(f"Auto-detected model path: {model_path}")
+            if not codes_path:
+                codes_path = json_files[0]
+                logger.info(f"Auto-detected codes path: {codes_path}")
+
+            # Try to find matching config
+            # Expected: {model_slug}_{timestamp}_config.json
+            # We can try to match the timestamp from the model path
+            import re
+
+            timestamp_match = re.search(r"(\d{8}_\d{6})", os.path.basename(model_path))
+            if timestamp_match:
+                ts = timestamp_match.group(1)
+                matching_configs = [c for c in config_files if ts in c]
+                if len(matching_configs) == 1:
+                    config_path = matching_configs[0]
+                    logger.info(f"Auto-detected config path: {config_path}")
+        else:
+            if not model_path:
+                logger.error(
+                    f"Model path not provided and auto-detection failed. Found {len(pt_files)} .pt files in {model_dir}."
+                )
+                raise typer.Exit(code=1)
+            if not codes_path:
+                logger.error(
+                    f"Codes path not provided and auto-detection failed. Found {len(json_files)} .json files in {model_dir}."
+                )
+                raise typer.Exit(code=1)
+
+    # Load config if found
+    loaded_config = {}
+    if config_path:
+        import json
+
+        with open(config_path, "r") as f:
+            loaded_config = json.load(f)
+            logger.info(f"Loaded configuration from {config_path}")
+
+    model_class = loaded_config.get("model_class", model_class)
+    if model_class is None:
+        model_class = "NeuralClassifier"  # Default fallback
+        logger.warning(f"Model class not specified. Using default: {model_class}")
+
+    model_name = loaded_config.get("model_name", model_name)
+    hidden_dim = loaded_config.get("hidden_dim", hidden_dim)
+    max_length = loaded_config.get("max_length", max_length)
+    pooling = loaded_config.get("pooling", pooling)
+    use_regex = loaded_config.get(
+        "use_regex", model_class in ["HybridClassifier", "RegexOnlyClassifier"]
+    )
+
+    logger.info(f"Starting evaluation on {eval_file}...")
+    logger.info(f"Model Class: {model_class}, Model Name: {model_name}")
+
+    # We reuse TrainingConfig but only fill relevant parts
+    config = TrainingConfig(
+        batch_size=batch_size,  # Allow CLI override
+        model_class=model_class,
+        model_name=model_name,
+        use_regex=use_regex,
+        hidden_dim=hidden_dim,
+        max_length=max_length,
+        pooling=pooling,
+        # Dummy values for training-specific args
+        num_epochs=0,
+        learning_rate=0.0,
+        experiment_name="eval_run",
+    )
+
+    if device:
+        config.device = device
+
+    trainer = Trainer(config)
+    logger.info(f"starting eval on {eval_file}...")
+
+    assert codes_path is not None, "Codes path must be provided or auto-detected"
+    trainer.evaluate_file(eval_file, model_path, codes_path, csv_path=csv_path)
+    logger.success("Evaluation completed.")
 
 
 if __name__ == "__main__":

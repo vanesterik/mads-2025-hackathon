@@ -3,27 +3,25 @@
 A utility for loading and processing Kadaster datasets, specifically designed for handling "rechtsfeitcodes" with label encoding.
 
 ## 1. Setup
-### 1.1. Install the data
-First of all, you will need to get the data. To do so, run this command:
+### 1.1. Install dependencies
+Run `uv sync` to install dependencies.
 
-```bash
-curl -sSL https://raw.githubusercontent.com/raoulg/private-data-hosting/refs/heads/main/download_data.sh | bash -s -- -o assets/
-```
+### 1.2. Download the data
+First of all, you will need to get the data. To do so, go to `http://145.38.195.113` in your browser, provide your email and the api_key (you will get this from your instructor), accept the terms and conditions, and you can download the data.
 
-This will:
-- ask you to accept terms & conditions
-- ask you for your email to identify you. Dont worry, we wont spam you :)
-- ask you for an API_KEY and an IP. You will get those from your instructor
-
-After these are provided, it downloads & unzips the data to the `assets/` folder.
-You will find:
+After unzipping, you will find:
 - README.md (please do)
 - rechtsfeiten.csv - these are the labels we need to predict, with a short description of the label
 - aktes.jsonl - this is the actual data: almost 20.000 anonymized legal documents
 
-### 1.2. Install dependencies
-Run `uv sync` to install dependencies.
+### 1.3. Split the data
+First, split your dataset into training and testing sets to ensure you have a held-out test set for evaluation.
 
+```bash
+kadaster split-data --data-path assets/aktes.jsonl --test-size 0.1
+```
+
+This will create `assets/train.jsonl` and `assets/test.jsonl`.
 ## 2. Explore the data
 To get a basic idea of what we are dealing with, run 
 
@@ -50,7 +48,7 @@ kadaster regex
 ```
 The see this in action.
 
-You will find that on the first run, the data is turned into a binary vector, and cached to [artifacts/vectorcache](artifacts/vectorcache/). The `RegexGenerator` creates a hash values based on all the regexes, so if you modify the regexes the hash will change. 
+You will find that on the first run, the data is turned into a binary vector, and cached to [artifacts/vectorcache](artifacts/vectorcache/). The `RegexGenerator` creates a hash values based on all the regexes, and a regex based on the hash of the filepath used to create the vectors. So if you modify the regexes the hash will change and the vectors will be re-calculated.
 
 In [artifacts/csv](artifacts/csv) you will find a `regex_evaluation_hash.csv` file. This looks like this:
 
@@ -72,6 +70,7 @@ If you run
 kadaster train --model-class RegexOnlyClassifier --epochs 5
 ``` 
 this will:
+
 -  load the regex vectorizer which serve as binary features $\{0,1\}^{C}$
 -  train the `NeuralClassifier` from [neural.py](src/akte_classifier/models/neural.py) 
 
@@ -81,7 +80,7 @@ The `NeuralClassifier` and `HybridClassifier` use a `TextVectorizer` to convert 
 For example, we can use [prajjwal1/bert-tiny](https://huggingface.co/prajjwal1/bert-tiny)
 
 ```bash
-kadaster train --model-class NeuralClassifier--model-name prajjwal1/bert-tiny --epochs 10
+kadaster train --model-class NeuralClassifier --model-name prajjwal1/bert-tiny --epochs 10
 ```
 This command will use the NeuralClassifier approach, download the prajjwal1/bert-tiny model as a vectorizer, and train for 10 epochs.
 
@@ -101,6 +100,41 @@ We can combine these two approaches by using a `HybridClassifier`.
 - text vectorizer does $g\colon \mathcal{T} \to \mathbb{R}^{d_v}$ with $d_v$ the dimension of the text vectorizer
 - we then concatenate the two vectors: $h\colon \mathcal{T} \to \mathbb{R}^{d_r + d_v}$
 - finally, we add a neural network $m\colon \mathbb{R}^{d_{r} + d_{v}} \to \mathbb{R}^{C}$ where $C$ is the number of classes in our training set
+
+You can test this with:
+```bash
+kadaster train --model-class HybridClassifier --model-name prajjwal1/bert-tiny --epochs 10
+```
+
+## Evaluate your runs
+You have made a train-test split at the beginning, and you are training on the train set where a part is held out for checking if you are overfitting.
+
+So you will get a lot of information just from that, and often there is no need to run an eval because the validation test will tell you enough. 
+However, at some point you might want to do an additional test on an unseen set. You can do so by testing your model on the hold-out set, test.jsonl Every training, your model weights are loaded to `artifacts/models/` along with a config and timestamp. If you provide the timestamp, and the eval file path, the model will load the weights for eval, and will run it on the test.jsonl file.
+
+You can test this with:
+
+```bash
+kadaster eval \
+  --eval-file assets/test.jsonl \
+  --timestamp 20250112_090112
+```
+
+if `20250112_090112` is the timestamp of your model. You can even do 
+
+```bash
+kadaster eval \
+  --eval-file assets/test.jsonl \
+  --timestamp 090112
+```
+And this will still guess the timestamp `20250112_090112`, but do doublecheck in the logs.
+The first time it will vectorize the test set, and the first eval you will see something like
+
+```bash
+SUCCESS  | akte_classifier.utils.tensor:load_or_compute_tensor:38 - Computed tensor and saved to artifacts/vectorcache/regex_f66bce0c_ffc819f4_split100_full.pt
+```
+
+in your logs.
 
 ## 4. LLM for the long tail
 
@@ -125,16 +159,48 @@ kadaster llm-classify --threshold 10 --limit 20
 
 We support several models via the Nebius API. You can switch models using the `--model-name` argument:
 
-- `meta-llama/Meta-Llama-3.1-8B-Instruct-fast` (Default)
-- `Qwen/Qwen3-32B-fast`
-- `Qwen/Qwen3-30B-A3B-Thinking-2507`
-- `openai/gpt-oss-20b`
-- `openai/gpt-oss-120b`
+- `meta-llama/Meta-Llama-3.1-8B-Instruct-fast` (Default) [128k context]
+- `Qwen/Qwen3-32B-fast` [41k context] 
+- `Qwen/Qwen3-30B-A3B-Thinking-2507` [262k context]
+- `openai/gpt-oss-20b` [132k context]
+- `openai/gpt-oss-120b` [131k context]
 
 Example:
 ```bash
-kadaster llm-classify --model-name Qwen/Qwen3-32B-fast --threshold 15
+kadaster llm-classify --model-name Qwen/Qwen3-32B-fast --threshold 10 --max-length 30000
 ```
+where you specify a token-limit of 30k tokens.
+
+### 3. Evaluate
+Evaluate the trained model on the held-out test set using the timestamp from your training run.
+
+```
+Example:
+```bash
+kadaster eval --eval-file assets/test.jsonl --timestamp 20251130_204405
+```
+## Your task
+Your task is to improve the model. Try to achieve the highest possible F1 micro score.
+
+Make sure we can evaluate the model with the eval command; this will use the saved modelweights in `artifacts/models/`. Eg
+
+```bash
+kadaster eval \
+  --eval-file assets/test.jsonl \
+  --model-class HybridClassifier \
+  --model-path artifacts/models/prajjwal1_bert-tiny_f66bce0c_20251130_204405.pt\
+  --codes-path artifacts/models/prajjwal1_bert-tiny_f66bce0c_20251130_204405_codes.json 
+```
+
+kadaster eval \
+  --eval-file assets/aktes-eval.jsonl \
+  --model-path artifacts/models/BAAI_bge-small-en-v1.5_20251130_175919.pt \
+  --codes-path artifacts/models/BAAI_bge-small-en-v1.5_20251130_175919_codes.json \
+  --model-name BAAI/bge-small-en-v1.5 \
+  --batch-size 32
+
+should run the trained model on the `assets/aktes-eval.jsonl` file and output the results to `artifacts/csv/eval_results.csv`.
+
 
 ## Caching & Versioning
 

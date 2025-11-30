@@ -37,10 +37,15 @@ def analyze_label_distribution(dataset: RechtsfeitDataset) -> Dict[str, int]:
 
     # Save to CSV
     import csv
+    from pathlib import Path
 
     total_occurrences = len(all_codes)
     labeled_counts = {}
     csv_output_path = "artifacts/csv/label_distribution.csv"
+
+    # Ensure directory exists
+    Path(csv_output_path).parent.mkdir(parents=True, exist_ok=True)
+
     with open(csv_output_path, "w", newline="") as f:
         writer = csv.writer(f)
         writer.writerow(["Code", "Count", "Percentage"])
@@ -67,6 +72,7 @@ def analyze_label_distribution(dataset: RechtsfeitDataset) -> Dict[str, int]:
     plt.tight_layout()
 
     output_path = "artifacts/img/label_distribution.png"
+    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
     plt.savefig(output_path)
     logger.success(f"Label distribution plot saved to {output_path}")
 

@@ -35,6 +35,9 @@ class Evaluator:
         # We prioritize regex_hash if present, then text_model_name
         parts = [base_name]
 
+        if "eval_file" in tags:
+            parts.insert(0, tags["eval_file"])
+
         if "text_model_name" in tags:
             # Clean model name (prajjwal1/bert-tiny -> prajjwal1_bert-tiny)
             clean_name = tags["text_model_name"].replace("/", "_")
@@ -84,6 +87,26 @@ class Evaluator:
         support = targets.sum(axis=0)
 
         data = []
+
+        # Calculate overall micro-averaged metrics
+        overall_precision = precision_score(
+            targets, preds, average="micro", zero_division=0
+        )
+        overall_recall = recall_score(targets, preds, average="micro", zero_division=0)
+        overall_f1 = f1_score(targets, preds, average="micro", zero_division=0)
+        total_support = support.sum()
+
+        # Add overall row
+        data.append(
+            {
+                "class_name": "000",  # Special code for overall
+                "precision": f"{overall_precision:.5f}",
+                "recall": f"{overall_recall:.5f}",
+                "f1": f"{overall_f1:.5f}",
+                "support": total_support,
+            }
+        )
+
         # use .5f precision for float columns
         for i, name in enumerate(self.class_names):
             data.append(
@@ -97,8 +120,14 @@ class Evaluator:
             )
 
         df = pd.DataFrame(data)
-        # Sort by support (descending) to see most frequent classes first
-        df = df.sort_values("support", ascending=False)
+        # Sort by support (descending) to see most frequent classes first, but keep 000 at top
+        # We can sort the rest and then concat, or just sort and rely on 000 being "small" string if we sort by class_name?
+        # The user wants 000 at the top.
+        # Let's split, sort the rest, and recombine.
+
+        df_overall = df.iloc[[0]]
+        df_classes = df.iloc[1:].sort_values("support", ascending=False)
+        df = pd.concat([df_overall, df_classes])
 
         output_path = self._get_filename("per_class_metrics", tags, "csv")
         df.to_csv(output_path, index=False)
@@ -262,10 +291,3 @@ class Evaluator:
         df.sort_values("f1", ascending=False, inplace=True)
         df.to_csv(output_path, index=False)
         logger.success(f"Saved results to {output_path}")
-        logger.info("\nTop 10 Regexes by F1 Score:")
-        logger.info(
-            "\n"
-            + df.head(10)[
-                ["code", "count", "f1", "precision", "recall", "regex"]
-            ].to_string()
-        )

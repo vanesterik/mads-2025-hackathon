@@ -1,5 +1,7 @@
+import json
 import os
 from dataclasses import asdict, dataclass
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 import numpy as np
@@ -36,13 +38,13 @@ def get_default_device() -> str:
 
 @dataclass
 class TrainingConfig:
-    data_path: str = "assets/aktes.jsonl"
+    data_path: str = "assets/train.jsonl"
     csv_path: str = "assets/rechtsfeiten.csv"
     batch_size: int = 32
     split_ratio: float = 0.8
     model_name: str = "prajjwal1/bert-tiny"
     learning_rate: float = 1e-3
-    num_epochs: int = 50
+    num_epochs: int = 10
     device: str = get_default_device()
     model_class: str = "HybridClassifier"  # Default to Hybrid
     use_regex: bool = True  # Whether to use regex features
@@ -62,17 +64,22 @@ class Trainer:
         self.class_names: List[str] = []
 
         # Models
-        self.vectorizer = None
-        self.regex_vectorizer = None
-        self.classifier = None
+        self.vectorizer: Optional[TextVectorizer] = None
+        self.regex_vectorizer: Optional[RegexVectorizer] = None
+        self.classifier: Optional[nn.Module] = None
 
         # training
-        self.loss_fn = None
-        self.optimizer = None
+        self.loss_fn: Optional[nn.Module] = None
+        self.optimizer: Optional[optim.Optimizer] = None
 
         # evaluation
-        self.evaluator = None
+        self.evaluator: Optional[Evaluator] = None
         self.logger = CompositeLogger([ConsoleLogger(), MLFlowLogger()])
+
+        # Checkpointing
+        self.best_model_path: Optional[str] = None
+        self.best_codes_path: Optional[str] = None
+        self.best_config_path: Optional[str] = None
 
     def get_data(self):
         logger.info("Initializing DatasetFactory...")
@@ -114,6 +121,7 @@ class Trainer:
         )
 
         self.num_classes = len(factory.encoder)
+        self.encoder_codes = factory.encoder.unique_codes
         self.class_names = [
             str(factory.encoder.idx2code.get(i + 1, i + 1))
             for i in range(self.num_classes)
@@ -277,11 +285,13 @@ class Trainer:
         }
 
     def run(self):
+        logger.info("Start setup...")
         self.get_data()
         self.setup_models()
         self.setup_optimization()
 
         self.logger.log_params(asdict(self.config))
+        logger.success("initialized run")
 
         # Log model tags (hashes)
         tags = {}
@@ -296,6 +306,7 @@ class Trainer:
         self.logger.log_tags(tags)
 
         best_val_loss = float("inf")
+        logger.info("Start training...")
 
         for epoch in range(1, self.config.num_epochs + 1):
             self.train_epoch(epoch)
@@ -303,7 +314,26 @@ class Trainer:
 
             if val_results["val_loss"] < best_val_loss:
                 best_val_loss = val_results["val_loss"]
-                # Save best model logic here if needed
+
+                # Delete previous best model if exists
+                if self.best_model_path and os.path.exists(self.best_model_path):
+                    os.remove(self.best_model_path)
+                    logger.info(f"Removed previous best model: {self.best_model_path}")
+
+                if self.best_codes_path and os.path.exists(self.best_codes_path):
+                    os.remove(self.best_codes_path)
+                    logger.info(f"Removed previous best codes: {self.best_codes_path}")
+
+                if self.best_config_path and os.path.exists(self.best_config_path):
+                    os.remove(self.best_config_path)
+                    logger.info(
+                        f"Removed previous best config: {self.best_config_path}"
+                    )
+
+                # Save new best model
+                self.best_model_path, self.best_codes_path, self.best_config_path = (
+                    self.save_checkpoint(epoch, tags)
+                )
 
             # Plot artifacts at the end
             if epoch == self.config.num_epochs:
@@ -319,6 +349,252 @@ class Trainer:
                 self.evaluator.save_per_class_metrics(
                     val_results["targets"], val_results["preds"], tags=tags
                 )
+
+    def save_checkpoint(self, epoch: int, tags: Dict[str, str]):
+        """
+        Saves model weights and encoder codes.
+        """
+        # Create artifacts/models directory
+        model_dir = "artifacts/models"
+        os.makedirs(model_dir, exist_ok=True)
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+        # Construct model slug
+        if self.config.model_class == "RegexOnlyClassifier":
+            model_slug = "regex_only"
+        else:
+            model_slug = self.config.model_name.replace("/", "_")
+
+        # Add regex hash if available
+        if "regex_hash" in tags:
+            model_slug += f"_{tags['regex_hash']}"
+
+        filename_base = f"{model_slug}_{timestamp}"
+
+        # 1. Save Model Weights
+        model_path = f"{model_dir}/{filename_base}.pt"
+        assert self.classifier is not None
+        torch.save(self.classifier.state_dict(), model_path)
+        logger.info(f"Saved model checkpoint to {model_path}")
+
+        # 2. Save Encoder Codes
+        if self.loaders and "train" in self.loaders:
+            pass
+
+        codes_path = None
+        if hasattr(self, "encoder_codes"):
+            codes_path = f"{model_dir}/{filename_base}_codes.json"
+            with open(codes_path, "w") as f:
+                json.dump(self.encoder_codes, f)
+            logger.info(f"Saved encoder codes to {codes_path}")
+        else:
+            logger.warning("Encoder codes not available, skipping codes saving.")
+
+        # 3. Save Training Config
+        config_path = f"{model_dir}/{filename_base}_config.json"
+        with open(config_path, "w") as f:
+            json.dump(asdict(self.config), f, indent=4)
+        logger.success(f"Saved training config to {config_path}")
+
+        return model_path, codes_path, config_path
+
+    def evaluate_file(
+        self,
+        file_path: str,
+        model_path: str,
+        codes_path: str,
+        csv_path: str = "assets/rechtsfeiten.csv",
+    ):
+        """
+        Evaluates a trained model on a specific file.
+        """
+        logger.info(f"Loading encoder codes from {codes_path}...")
+        with open(codes_path, "r") as f:
+            encoder_codes = json.load(f)
+        logger.info(f"Loaded {len(encoder_codes)} encoder codes.")
+
+        self.regex_vectorizer = None  # Initialize to None
+        if self.config.use_regex:
+            logger.info("Initializing Regex Model for evaluation...")
+            from akte_classifier.datasets.dataset import LabelEncoder
+            from akte_classifier.models.regex import (RegexGenerator,
+                                                      RegexVectorizer)
+
+            generator = RegexGenerator(csv_path)
+            # RegexVectorizer needs the encoder to map regex matches to indices.
+            encoder = LabelEncoder(encoder_codes)
+
+            self.regex_vectorizer = RegexVectorizer(generator, label_encoder=encoder)
+
+        factory = DatasetFactory(
+            file_path=file_path,
+            batch_size=self.config.batch_size,
+            split_ratio=1.0,  # Use full file for evaluation
+            encoder_codes=encoder_codes,
+        )
+
+        # 3. Initialize Models
+        if self.config.model_class in ["NeuralClassifier", "HybridClassifier"]:
+            self.vectorizer = TextVectorizer(
+                self.config.model_name,
+                max_length=self.config.max_length,
+                pooling=self.config.pooling,
+            )
+            self.vectorizer.model.to(self.device)
+            for param in self.vectorizer.model.parameters():
+                param.requires_grad = False
+        else:
+            self.vectorizer = None
+
+        # Regex Vectorizer
+        if self.config.use_regex:
+            regex_gen = RegexGenerator(self.config.csv_path)
+            self.regex_vectorizer = RegexVectorizer(
+                regex_gen, label_encoder=factory.encoder
+            )
+
+        # 4. Vectorize Data
+        assert (
+            self.vectorizer is not None
+            or self.config.model_class == "RegexOnlyClassifier"
+        )
+        loaders = factory.get_vectorized_loader(
+            self.vectorizer, self.regex_vectorizer, splits=["train"]
+        )
+        eval_loader = loaders["train"]
+
+        assert factory.encoder is not None, "Encoder must be initialized"
+        self.num_classes = len(factory.encoder)
+        self.class_names = [
+            str(factory.encoder.idx2code.get(i + 1, i + 1))
+            for i in range(self.num_classes)
+        ]
+
+        # 5. Setup Model and Load Weights
+        self.setup_models()
+
+        logger.info(f"Loading model weights from {model_path}...")
+        state_dict = torch.load(model_path, map_location=self.device)
+        assert self.classifier is not None
+        self.classifier.load_state_dict(state_dict)
+        self.classifier.eval()
+
+        # 6. Run Evaluation
+        self.loss_fn = nn.BCEWithLogitsLoss()
+        self.evaluator = Evaluator(self.num_classes, class_names=self.class_names)
+        logger.success("Evaluation setup complete, starting evaluation...")
+
+        total_loss = 0.0
+        all_preds = []
+        all_probs = []
+        all_targets = []
+
+        with torch.no_grad():
+            for batch in tqdm(eval_loader, desc="Evaluating"):
+                if len(batch) == 3:
+                    texts, regex_feats, labels = batch
+                    regex_feats = regex_feats.to(self.device)
+                else:
+                    texts, labels = batch
+                    regex_feats = None
+
+                labels = labels.to(self.device)
+
+                # Forward pass
+                # Vectorize text on the fly if needed (though we cached embeddings, wait)
+                # The loader returns raw text if we used get_vectorized_loader?
+                # No, get_vectorized_loader returns TENSORS if we provided vectorizer.
+                # Let's check get_vectorized_loader implementation.
+                # It returns embeddings if vectorizer is provided.
+                # So 'texts' here are actually embeddings?
+                # Let's check Dataset __getitem__.
+                # VectorizedRechtsfeitDataset returns (embedding, regex, label) or (embedding, label).
+                # So 'texts' is actually 'embeddings'.
+
+                # Wait, if we are using NeuralClassifier, it expects embeddings?
+                # NeuralClassifier forward takes 'x'.
+                # HybridClassifier forward takes 'text_emb', 'regex_features'.
+
+                # So we don't need to call self.vectorizer here!
+                # The data is ALREADY vectorized.
+
+                # However, the original code had:
+                # emb = self.vectorizer(texts)
+                # This implies 'texts' were strings.
+
+                # But get_vectorized_loader was used.
+                # If get_vectorized_loader was used, the dataset yields pre-computed embeddings.
+
+                # Let's verify VectorizedRechtsfeitDataset.
+                # It yields self.embeddings[idx].
+
+                # So 'texts' IS the embedding tensor.
+
+                # BUT, if we look at the errors:
+                # src/akte_classifier/trainer.py:495: error: "None" not callable [misc]
+                # This corresponds to: emb = self.vectorizer(texts)
+
+                # If we are using pre-computed embeddings, we should NOT call vectorizer again.
+                # We should just use 'texts' as 'emb'.
+
+                # Let's assume the intention of 'get_vectorized_loader' is to return embeddings.
+                # So we should remove the vectorizer call.
+
+                emb = texts.to(self.device)
+
+                if self.config.model_class == "RegexOnlyClassifier":
+                    assert self.classifier is not None
+                    logits = self.classifier(regex_feats)
+                elif self.config.model_class == "HybridClassifier":
+                    assert self.classifier is not None
+                    logits = self.classifier(emb, regex_feats)
+                else:
+                    assert self.classifier is not None
+                    logits = self.classifier(emb)
+
+                assert self.loss_fn is not None
+                loss = self.loss_fn(logits, labels)
+                total_loss += loss.item()
+
+                probs = torch.sigmoid(logits)
+                preds = (probs > 0.5).float()
+
+                all_probs.append(probs.cpu().numpy())
+                all_preds.append(preds.cpu().numpy())
+                all_targets.append(labels.cpu().numpy())
+
+        avg_loss = total_loss / len(eval_loader)
+
+        all_preds_arr = np.vstack(all_preds)
+        all_probs_arr = np.vstack(all_probs)
+        all_targets_arr = np.vstack(all_targets)
+
+        assert self.evaluator is not None
+        metrics = self.evaluator.compute_metrics(all_targets_arr, all_preds_arr)
+        metrics["eval_loss"] = avg_loss
+
+        logger.info(f"Evaluation Results: {metrics}")
+
+        import re
+
+        timestamp_match = re.search(r"(\d{8}_\d{6})", os.path.basename(model_path))
+        timestamp_prefix = f"{timestamp_match.group(1)}_" if timestamp_match else ""
+
+        # Generate plots/artifacts
+        eval_file_name = f"{timestamp_prefix}eval_{os.path.basename(file_path)}"
+        tags = {"eval_file": eval_file_name}
+
+        assert self.evaluator is not None
+        self.evaluator.save_per_class_metrics(all_targets_arr, all_preds_arr, tags=tags)
+        self.evaluator.plot_global_confusion_matrix(
+            all_targets_arr, all_preds_arr, tags=tags
+        )
+        self.evaluator.plot_roc_curve(all_targets_arr, all_probs_arr, tags=tags)
+        self.evaluator.plot_pr_curve(all_targets_arr, all_probs_arr, tags=tags)
+        logger.success(f"Saved evaluation artifacts with {timestamp_prefix}")
+
+        return metrics
 
 
 class LLMRunner:
@@ -363,7 +639,7 @@ class LLMRunner:
 
         # 3. Init DatasetFactory with filtering
         factory = DatasetFactory(
-            file_path="assets/aktes.jsonl",
+            file_path="assets/train.jsonl",
             long_tail_threshold=self.threshold,
             batch_size=1,
         )
@@ -380,6 +656,7 @@ class LLMRunner:
             prompt_template=prompt_template,
             max_length=self.max_length,
         )
+        logger.success(f"Initialized LLM classifier for {self.model_name}")
 
         return long_tail_codes, descriptions, factory, classifier
 
