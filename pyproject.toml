@@ -19,7 +19,8 @@ dependencies = [
     "mlflow>=2.0.0",
     "typer>=0.20.0",
     "openai>=2.8.1",
-    "pytest>=9.0.1",
+    "pytest>=8.0.0",
+    "pytest-cov>=6.0.0",
 ]
 
 [build-system]
@@ -44,5 +45,5 @@ dev = [
 ]
 
 [tool.pytest.ini_options]
-addopts = "-v"
+addopts = "-v --cov=src/akte_classifier --cov-report=term-missing"
 testpaths = ["tests"]
