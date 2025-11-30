@@ -720,10 +720,10 @@ class LLMRunner:
             f"artifacts/csv/per_class_metrics_{safe_model_name}.csv"
         )
 
-        # Confusion Matrix
-        evaluator.plot_global_confusion_matrix(y_true, y_pred, tags=tags)
+        # Overview Metrics Plot
+        evaluator.plot_overview_metrics(y_true, y_pred, tags=tags)
         self.mlflow_logger.log_artifact(
-            f"artifacts/img/global_confusion_matrix_{safe_model_name}.png"
+            f"artifacts/img/overview_metrics_{safe_model_name}.png"
         )
 
         # ROC and PR curves
