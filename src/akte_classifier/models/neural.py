@@ -164,8 +164,8 @@ class ResidualBlock(nn.Module):
     A helper block that implements the Skip Connection and Batch Normalization.
     """
 
-    def _init_(self, hidden_dim, dropout=0.1):
-        super()._init_()
+    def __init__(self, hidden_dim, dropout=0.1):  # FIXED: _init_ -> __init__
+        super().__init__()  # FIXED: super()._init_() -> super().__init__()
         self.block = nn.Sequential(
             nn.Linear(hidden_dim, hidden_dim),
             nn.BatchNorm1d(hidden_dim),  # Batch Norm
