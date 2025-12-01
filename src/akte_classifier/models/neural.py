@@ -159,28 +159,60 @@ class NeuralClassifier(nn.Module):
         return x
 
 
-class HybridClassifier(nn.Module):
+class ResidualBlock(nn.Module):
     """
-    A classifier that combines text embeddings and regex features.
+    A helper block that implements the Skip Connection and Batch Normalization.
     """
 
-    def __init__(
+    def _init_(self, hidden_dim, dropout=0.1):
+        super()._init_()
+        self.block = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.BatchNorm1d(hidden_dim),  # Batch Norm
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.BatchNorm1d(hidden_dim),  # Batch Norm before addition
+        )
+        self.relu = nn.ReLU()
+
+    def forward(self, x):
+        identity = x  # 1. Save input (Skip connection)
+        out = self.block(x)  # 2. Process
+        out += identity  # 3. Add input to output
+        out = self.relu(out)  # 4. Final Activation
+        return out
+
+
+class HybridClassifier(nn.Module):
+    """
+    A classifier that combines text embeddings and regex features
+    using Residual Connections and Batch Normalization.
+    """
+
+    def _init_(
         self, input_dim: int, regex_dim: int, num_classes: int, hidden_dim: int = 128
     ):
-        super().__init__()
+        super()._init_()
 
         # Concatenated input dimension
         combined_dim = input_dim + regex_dim
         logger.info(f"Combined dimension: {combined_dim}")
 
-        self.sequential = nn.Sequential(
-            nn.Linear(combined_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Dropout(0.1),
-            nn.Linear(hidden_dim, num_classes),
+        # 1. Input Projection
+        # Transforms the 'combined_dim' (e.g., 800) to 'hidden_dim' (e.g., 128).
+        # We cannot use a skip connection here because sizes differ.
+        self.input_projection = nn.Sequential(
+            nn.Linear(combined_dim, hidden_dim), nn.BatchNorm1d(hidden_dim), nn.ReLU()
         )
+
+        # 2. Residual Layer (Skip Layer)
+        # Input is 128, Output is 128. This allows us to add the skip connection.
+        self.residual_layer = ResidualBlock(hidden_dim, dropout=0.1)
+
+        # 3. Output Head
+        # Transforms 'hidden_dim' to 'num_classes'
+        self.output_head = nn.Linear(hidden_dim, num_classes)
 
     def forward(
         self, text_emb: torch.Tensor, regex_feats: torch.Tensor
@@ -188,7 +220,16 @@ class HybridClassifier(nn.Module):
         """
         Forward pass. Concatenates inputs and returns logits.
         """
-        # Concatenate along the feature dimension (dim=1)
+        # 1. Concatenate along the feature dimension (dim=1)
         combined = torch.cat((text_emb, regex_feats), dim=1)
-        x = self.sequential(combined)
-        return x
+
+        # 2. Project to hidden dimension
+        x = self.input_projection(combined)
+
+        # 3. Apply Residual Block (with skip connection)
+        x = self.residual_layer(x)
+
+        # 4. Final Classification
+        logits = self.output_head(x)
+
+        return logits
