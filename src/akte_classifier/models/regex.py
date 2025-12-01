@@ -25,6 +25,38 @@ class RegexGenerator:
             545: r"kwalitatieve\s+verplichting",
             # 572: Remove "stuk betreffende", handle singular/plural
             572: r"erfdienstbaarhe(id|den)",
+            # 537: Hypotheek (Stop matching "Doorhaling" or "Royement")
+            537: r"(?<!doorhaling\s)(?<!royement\s)(akte\s+van\s+)?hypotheek(?!.*(doorhaling|royement|afstand))",
+            # 538: Hypotheek doorhaling (Cancellation)
+            538: r"(algeheel\s+)?(royement|afstand|doorhaling).*(hypotheek|recht)",
+            # 517: Beslag (Stop matching "Doorhaling")
+            517: r"(?<!doorhaling\s)(?<!opheffing\s)(proces-verbaal\s+van\s+)?beslag(?!.*(doorhaling|opheffing))",
+            # 518: Beslag doorhaling
+            518: r"(doorhaling|opheffing).*beslag",
+            # 652: Koopovereenkomst 7:3 (Vormerkung)
+            652: r"(koopovereenkomst|vormerkung).*(7:3|inschrijving)",
+            # 543: Koopovereenkomst beëindiging
+            543: r"(ontbinding|beëindiging|vernietiging).*(koopovereenkomst|koopcontract)",
+            # 532: Aanvullende akte (Often called Rectificatie/Depot)
+            532: r"(akte\s+van\s+)?(rectificatie|aanvulling|verbetering|depot)",
+            # 564: Verbetering (Similar to 532, but sometimes distinct)
+            564: r"(blad)?verbetering",
+            # 644: Opstal Nutsvoorzieningen (Simplify)
+            644: r"(vestiging\s+)?(zakelijk\s+)?recht\s+van\s+opstal.*(nut|kabel|leiding|netwerk|trafo)",
+            # 516: Beperkt recht wijziging
+            516: r"(wijziging|aanvulling).*(voorwaarden|bepalingen)",
+            # 527: Erfpachtcanon wijziging
+            527: r"(wijziging|herziening).*(canon|erfpacht)",
+            # 616: Splitsing
+            616: r"(akte\s+van\s+)?(hoofd)?splitsing.*appartementsrecht(en)?",
+            # 671: Vermenging
+            671: r"(akte\s+van\s+)?vermenging",
+            # 581: Divorce/Partnership
+            581: r"verdeling.*(echtscheiding|ontbinding|huwelijk|partnerschap)",
+            # 579: Inheritance/Heirs
+            579: r"verdeling.*(nalatenschap|erfgena(a)?m|overlijden)",
+            # 580: General Division (Catch-all if keywords above are missing)
+            580: r"(akte\s+van\s+)?verdeling",
         }
         # ------------------------
 
