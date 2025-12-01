@@ -1,10 +1,104 @@
 import json
+import os
 
 import torch
 import torch.nn as nn
 from huggingface_hub import hf_hub_download
 from loguru import logger
+from openai import OpenAI
 from transformers import AutoModel, AutoTokenizer
+
+
+class NebiusTextVectorizer:
+    """
+    Wraps the Nebius Token Factory / OpenAI compatible API for text vectorization.
+    """
+
+    def __init__(
+        self,
+        model_name: str,
+        # max_length and pooling are ignored as they are handled by the API
+        max_length: int | None = None,
+        pooling: str | None = None,
+    ):
+        """
+        Initializes the client and specifies the model to use.
+        The max_length and pooling arguments are kept for compatibility but ignored.
+        """
+        self.model_name = model_name
+
+        # 1. Initialize the OpenAI client pointing to the Nebius endpoint
+        self.client = OpenAI(
+            base_url="https://api.tokenfactory.nebius.com/v1/",
+            api_key=os.environ.get("NEBIUS_API_KEY"),
+        )
+
+        # 2. Log initialization details
+        # Note: We can't determine the hidden_size easily without an extra API call
+        # or checking the model's documentation. We default to a common size.
+        # A quick check can be done by calling self.hidden_size once.
+        self._hidden_size = None
+
+        logger.info(
+            f"TextVectorizer initialized for Nebius model={self.model_name}. "
+            "Max length and pooling are managed by the API."
+        )
+
+    # The _detect_pooling_strategy and all tokenization/forward logic are removed.
+
+    def forward(self, texts: list[str]) -> torch.Tensor:
+        """
+        Encodes a list of texts into vectors using the Nebius Embeddings API.
+        """
+        if not texts:
+            return torch.empty((0, self.hidden_size))
+
+        # 1. API Call to get embeddings
+        try:
+            response = self.client.embeddings.create(
+                model=self.model_name,
+                input=texts,  # The API accepts a list of strings directly
+            )
+        except Exception as e:
+            logger.error(f"Error calling Nebius API for embeddings: {e}")
+            raise e
+
+        # 2. Extract and format the embeddings
+        # The response structure is: response.data[i].embedding (a list of floats)
+
+        # Get the list of embeddings (list of lists of floats)
+        embeddings_list = [item.embedding for item in response.data]
+
+        # Convert the list of lists into a PyTorch tensor
+        vector_tensor = torch.tensor(embeddings_list, dtype=torch.float32)
+
+        # 3. Cache the hidden size after the first successful call
+        if self._hidden_size is None and vector_tensor.shape[1] > 0:
+            self._hidden_size = vector_tensor.shape[1]
+            logger.info(f"Auto-detected hidden_size: {self._hidden_size}")
+
+        return vector_tensor
+
+    @property
+    def hidden_size(self) -> int:
+        """
+        Returns the embedding dimension. Makes an API call on first access if not known.
+        """
+        if self._hidden_size is not None:
+            return self._hidden_size
+
+        # If not known, perform a test API call with a dummy input
+        logger.info("Determining hidden_size with a test API call...")
+        dummy_input = ["test sentence"]
+
+        try:
+            vector = self.forward(dummy_input)
+            self._hidden_size = vector.shape[1]
+            return self._hidden_size
+        except Exception as e:
+            logger.error(f"Could not determine hidden_size via API call: {e}")
+            # Fallback to a common size if API fails, though this is risky
+            return 768  # Common hidden size for models like BERT/BGE
 
 
 class TextVectorizer:
@@ -191,7 +285,7 @@ class HybridClassifier(nn.Module):
     """
 
     def __init__(
-        self, input_dim: int, regex_dim: int, num_classes: int, hidden_dim: int = 128
+        self, input_dim: int, regex_dim: int, num_classes: int, hidden_dim: int = 512
     ):
         super().__init__()
 
