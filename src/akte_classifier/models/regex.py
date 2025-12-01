@@ -20,13 +20,22 @@ class RegexGenerator:
         # --- MANUAL OVERRIDES ---
         self.manual_overrides = {
             # 606: "Overdracht" is legally called "Levering" in deeds
-            606: r"(akte\s+van\s+)?(levering|eigendomsoverdracht)",
+            # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+            # 606: r"(akte\s+van\s+)?(levering|eigendomsoverdracht)",
+            606: r"(?s)(?!.*om\s+niet).*\b(levering|vervreemding|eigendomsoverdracht|verkoop|wordt\s+geleverd|lever(en|t)?\s+.*?aanvaard(t|en)?)\b",
+            # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
             # 545: Remove "stuk betreffende" (database metadata)
-            545: r"kwalitatieve\s+verplichting",
+            # 545: r"kwalitatieve\s+verplichting",
+            545: r"(?s)(kwalitatieve\s+verplichting|art(ikel)?\.?\s*(6\s*:\s*252|252\s*,?\s*boek\s+6))",
+            # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
             # 572: Remove "stuk betreffende", handle singular/plural
-            572: r"erfdienstbaarhe(id|den)",
+            # 572: r"erfdienstbaarhe(id|den)",
+            572: r"(?s)(?=(?:.*?\b(erfdienstbaarhe(id|den))\b)).*?\b(vestig(ing|en|t)|gevestigd|afstand\s+te\s+doen|aan(vaard(t|en)?|te\s+nemen))\b",
+            # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
             # 537: Hypotheek (Stop matching "Doorhaling" or "Royement")
-            537: r"(?<!doorhaling\s)(?<!royement\s)(akte\s+van\s+)?hypotheek(?!.*(doorhaling|royement|afstand))",
+            # 537: r"(?<!doorhaling\s)(?<!royement\s)(akte\s+van\s+)?hypotheek(?!.*(doorhaling|royement|afstand))",
+            537: r"(?s)(?<!doorhaling\s)(?<!royement\s)\b(hypotheek(stelling)?|zekerheidstelling|ter\s+verzekering\s+van|verle(en|n)(t|en)?\s+.*?hypotheek)\b(?!.*(doorhaling|royement|afstand))",
+            # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
             # 538: Hypotheek doorhaling (Cancellation)
             538: r"(algeheel\s+)?(royement|afstand|doorhaling).*(hypotheek|recht)",
             # 517: Beslag (Stop matching "Doorhaling")
