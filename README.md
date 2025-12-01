@@ -2,12 +2,22 @@
 
 A utility for loading and processing Kadaster datasets, specifically designed for handling "rechtsfeitcodes" with label encoding.
 
+## Suggested team roles
+
+In this project, there will be a few distinct roles:
+1. Regexer: the regexes are a fast and simple way to get results. However, you will need a lot of domain knowledge to get them to work. Study the background, talk to the domain experts available, and try to create better regexes. 
+2. TextVectorizer: huggingface offers a lot of textvectorizers; dive into huggingface documentation, try to find better and more modern models, and build on that. Make sure to share your vectorcache with your team!
+3. Long tail with LLM: Yes, you could try to use a LLM for everything. You could also go shopping with a bulldozer. My suggestion would be to make smart use of the LLMs, and focus on the long tail that needs zero-shot learning. It will be a good idea to improve the descriptions of every class, so similar to the regexer, talk to the domain experts an try to get as much background knowledge as possible. Use the analytics of every class to focus your strategy (see section 3.1 on the `kadaster regex` command)
+4. Design transfer learning. We use both the regex and textvectorizer as input for a three-layer neural network. There is room for improvement here! So show us what you have learned during class and build your own network.
+
+If you have a team with 5 people, one person can focus on gathering domain knowledge from the experts and feed this to both the regex / llm roles to improve their regexes and prompts, or help with one of the roles that needs most help.
+
 ## 1. Setup
 ### 1.1. Install dependencies
 Run `uv sync` to install dependencies.
 
 ### 1.2. Download the data
-First of all, you will need to get the data. To do so, go to `http://145.38.195.113` in your browser, provide your email and the api_key (you will get this from your instructor), accept the terms and conditions, and you can download the data.
+First of all, you will need to get the data. To do so, go to [http://145.38.195.113](http://145.38.195.113) in your browser, provide your email and the api_key (you will get this from your instructor), accept the terms and conditions, and you can download the data.
 
 After unzipping, you will find:
 - README.md (please do)
@@ -49,6 +59,8 @@ kadaster regex
 The see this in action.
 
 You will find that on the first run, the data is turned into a binary vector, and cached to [artifacts/vectorcache](artifacts/vectorcache/). The `RegexGenerator` creates a hash values based on all the regexes, and a regex based on the hash of the filepath used to create the vectors. So if you modify the regexes the hash will change and the vectors will be re-calculated.
+
+This caching is usefull to speed up calculations, check the section on private file sharing to see how to share chaches in your group.
 
 In [artifacts/csv](artifacts/csv) you will find a `regex_evaluation_hash.csv` file. This looks like this:
 
@@ -106,7 +118,7 @@ You can test this with:
 kadaster train --model-class HybridClassifier --model-name prajjwal1/bert-tiny --epochs 10
 ```
 
-## Evaluate your runs
+## 3.5 Evaluate your runs
 You have made a train-test split at the beginning, and you are training on the train set where a part is held out for checking if you are overfitting.
 
 So you will get a lot of information just from that, and often there is no need to run an eval because the validation test will tell you enough. 
@@ -142,7 +154,7 @@ The dataset contains a "long tail" of labels that appear very infrequently. Trad
 
 To address this, we use a **Zero-Shot Learning** approach with Large Language Models (LLMs). Instead of training a model on examples, we provide the LLM with the *description* of the label (from `rechtsfeiten.csv`) and the text of the document, and ask it to determine if the label applies.
 
-### 4.1 Usage
+### 4.1 Running LLM inference
 
 You can use the `llm-classify` command to run this process.
 
@@ -171,18 +183,10 @@ kadaster llm-classify --model-name Qwen/Qwen3-32B-fast --threshold 10 --max-leng
 ```
 where you specify a token-limit of 30k tokens.
 
-### 3. Evaluate
-Evaluate the trained model on the held-out test set using the timestamp from your training run.
+## 5. Your task
+Your task, if you choose to accept it, is to improve the model. Try to achieve the highest possible F1 micro score.
 
-```
-Example:
-```bash
-kadaster eval --eval-file assets/test.jsonl --timestamp 20251130_204405
-```
-## Your task
-Your task is to improve the model. Try to achieve the highest possible F1 micro score.
-
-Make sure we can evaluate the model with the eval command; this will use the saved modelweights in `artifacts/models/`.
+Make sure we can evaluate the model with the eval command; this will use the saved modelweights in `artifacts/models/`, so test the `kadaster eval` command with your best model to see how good it works.
 
 ## MLFlow Tracking
 
@@ -219,6 +223,9 @@ response = client.embeddings.create(
 
 print(response.to_json())
 ```
+
+So if you think it might be usefull, implement it yourself.
+
 And you can use these models:
 - BAAI/bge-multilingual-gemma2 (8k context)
 - BAAI/bge-en-icl (32k context)
@@ -235,4 +242,6 @@ To optimize performance, the system caches vectorized features in `artifacts/vec
 This ensures that if you modify the regex logic or the CSV file, the hash changes, invalidating the cache and forcing a recomputation.
 
 Similarly, evaluation results are saved with the hash (e.g., `artifacts/csv/regex_evaluation_f66bce0c.csv`) to allow tracking performance across different regex versions.
+
+Sharing vectorcaches and modelweights in your team is encouraged, you can use the [private-data-hosting](https://github.com/raoulg/private-data-hosting) repo i created to set up your own secure file sharing service with your team.
 
