@@ -190,10 +190,10 @@ class HybridClassifier(nn.Module):
     using Residual Connections and Batch Normalization.
     """
 
-    def _init_(
+    def __init__(
         self, input_dim: int, regex_dim: int, num_classes: int, hidden_dim: int = 128
     ):
-        super()._init_()
+        super().__init__()
 
         # Concatenated input dimension
         combined_dim = input_dim + regex_dim
