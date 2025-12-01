@@ -10,11 +10,24 @@ class RegexGenerator:
     """
     Based on a CSV file with code and description,
     this class automatically generate regex patterns for each code.
+    Includes manual overrides for specific domain knowledge.
     """
 
     def __init__(self, csv_path: str):
         self.csv_path = csv_path
         self.regexes: Dict[int, str] = {}
+
+        # --- MANUAL OVERRIDES ---
+        self.manual_overrides = {
+            # 606: "Overdracht" is legally called "Levering" in deeds
+            606: r"(akte\s+van\s+)?(levering|eigendomsoverdracht)",
+            # 545: Remove "stuk betreffende" (database metadata)
+            545: r"kwalitatieve\s+verplichting",
+            # 572: Remove "stuk betreffende", handle singular/plural
+            572: r"erfdienstbaarhe(id|den)",
+        }
+        # ------------------------
+
         self._generate_regexes()
 
     def _generate_regexes(self):
@@ -24,13 +37,9 @@ class RegexGenerator:
         logger.info(f"Parsing {self.csv_path} for regex generation...")
 
         with open(self.csv_path, "r", encoding="utf-8") as f:
-            # The CSV uses ';' as delimiter based on user input
             reader = csv.reader(f, delimiter=";")
-
-            # Skip header if present (Code;Waarde)
             header = next(reader, None)
             if header and header[0].lower() != "code":
-                # If first row doesn't look like header, reset
                 f.seek(0)
 
             for row in reader:
@@ -41,9 +50,14 @@ class RegexGenerator:
                     code = int(row[0].strip())
                     description = row[1].strip()
 
-                    # Generate regex from description
-                    pattern = self._create_pattern(description)
-                    self.regexes[code] = pattern
+                    # --- CHECK FOR OVERRIDE FIRST ---
+                    if code in self.manual_overrides:
+                        self.regexes[code] = self.manual_overrides[code]
+                    else:
+                        # Fallback to auto-generation
+                        pattern = self._create_pattern(description)
+                        self.regexes[code] = pattern
+                    # --------------------------------
 
                 except ValueError:
                     continue
@@ -71,11 +85,6 @@ class RegexGenerator:
         # Handle "enz." (etc.) - remove it
         clean_desc = description.replace("enz.", "").strip()
 
-        # Logic: If parentheses exist,
-        # eg mandeligheid (wijziging)
-        # we treat the parts inside and outside as separate required components.
-        # We assume the order in the description matters
-        # So we use "part1.*part2" which is much faster than lookaheads.
         if "(" in clean_desc and ")" in clean_desc:
             # Split by parens
             parts = re.split(r"[\(\)]", clean_desc)
