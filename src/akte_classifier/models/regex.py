@@ -1,82 +1,81 @@
 import csv
 import re
-from typing import Dict, List
+from typing import Dict, List, Set, Optional
+from functools import lru_cache
 
 import torch
 from loguru import logger
+
+# Try to import Aho-Corasick for fast multi-string matching
+try:
+    import ahocorasick
+
+    USE_AHO_CORASICK = True
+    logger.info("Using Aho-Corasick for fast trigger matching")
+except ImportError:
+    USE_AHO_CORASICK = False
+    logger.info("Aho-Corasick not available, using standard trigger matching")
 
 
 class RegexGenerator:
     """
     Based on a CSV file with code and description,
     this class automatically generate regex patterns for each code.
-    Includes manual overrides for specific domain knowledge.
+    Includes manual overrides and TRIGGER WORDS for performance optimization.
     """
 
     def __init__(self, csv_path: str):
         self.csv_path = csv_path
         self.regexes: Dict[int, str] = {}
+        self.triggers: Dict[int, List[str]] = {}
 
-        # --- MANUAL OVERRIDES ---
+        # --- MANUAL REGEX OVERRIDES ---
         self.manual_overrides = {
-            # 606: "Overdracht" is legally called "Levering" in deeds
-            # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-            # 606: r"(akte\s+van\s+)?(levering|eigendomsoverdracht)",
-            606: r"(?s)(?!.*om\s+niet).*\b(levering|vervreemding|eigendomsoverdracht|verkoop|wordt\s+geleverd|lever(en|t)?\s+.*?aanvaard(t|en)?)\b",
-            # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-            # 545: Remove "stuk betreffende" (database metadata)
-            # 545: r"kwalitatieve\s+verplichting",
-            545: r"(?s)(kwalitatieve\s+verplichting|art(ikel)?\.?\s*(6\s*:\s*252|252\s*,?\s*boek\s+6))",
-            # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-            # 572: Remove "stuk betreffende", handle singular/plural
-            # 572: r"erfdienstbaarhe(id|den)",
-            572: r"(?s)(?=(?:.*?\b(erfdienstbaarhe(id|den))\b)).*?\b(vestig(ing|en|t)|gevestigd|afstand\s+te\s+doen|aan(vaard(t|en)?|te\s+nemen))\b",
-            # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-            # 537: Hypotheek (Stop matching "Doorhaling" or "Royement")
-            # 537: r"(?<!doorhaling\s)(?<!royement\s)(akte\s+van\s+)?hypotheek(?!.*(doorhaling|royement|afstand))",
-            537: r"(?s)(?<!doorhaling\s)(?<!royement\s)\b(hypotheek(stelling)?|zekerheidstelling|ter\s+verzekering\s+van|verle(en|n)(t|en)?\s+.*?hypotheek)\b(?!.*(doorhaling|royement|afstand))",
-            # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-            # 538: Hypotheek doorhaling (Cancellation)
+            # 545: Kwalitatieve verplichting
+            545: r"(kwalitatieve\s+verplichting|art(ikel)?\.?\s*(6\s*:\s*252|252\s*,?\s*boek\s+6))",
+            # 537: Hypotheek (optimized negative lookaheads)
+            537: r"(?<!doorhaling\s)(?<!royement\s)\b(hypotheek(stelling)?|zekerheidstelling|ter\s+verzekering\s+van|verle(en|n)(t|en)?\s+.*?hypotheek)\b(?!.*(doorhaling|royement|afstand))",
+            # 572: Erfdienstbaarheid (optimized)
+            572: r"\b(erfdienstbaarhe(id|den))\b.*?\b(vestig(ing|en|t)|gevestigd|afstand\s+te\s+doen|aan(vaard(t|en)?|te\s+nemen))\b",
+            # 606: Levering (optimized negative lookahead)
+            606: r"\b(levering|vervreemding|eigendomsoverdracht|verkoop|wordt\s+geleverd|lever(en|t)?\s+.*?aanvaard(t|en)?)\b(?!.*om\s+niet)",
+            # Standard fixes (removed (?s))
             538: r"(algeheel\s+)?(royement|afstand|doorhaling).*(hypotheek|recht)",
-            # 517: Beslag (Stop matching "Doorhaling")
             517: r"(?<!doorhaling\s)(?<!opheffing\s)(proces-verbaal\s+van\s+)?beslag(?!.*(doorhaling|opheffing))",
-            # 518: Beslag doorhaling
             518: r"(doorhaling|opheffing).*beslag",
-            # 652: Koopovereenkomst 7:3 (Vormerkung)
             652: r"(koopovereenkomst|vormerkung).*(7:3|inschrijving)",
-            # 543: Koopovereenkomst beëindiging
             543: r"(ontbinding|beëindiging|vernietiging).*(koopovereenkomst|koopcontract)",
-            # 532: Aanvullende akte (Often called Rectificatie/Depot)
             532: r"(akte\s+van\s+)?(rectificatie|aanvulling|verbetering|depot)",
-            # 564: Verbetering (Similar to 532, but sometimes distinct)
             564: r"(blad)?verbetering",
-            # 644: Opstal Nutsvoorzieningen (Simplify)
             644: r"(vestiging\s+)?(zakelijk\s+)?recht\s+van\s+opstal.*(nut|kabel|leiding|netwerk|trafo)",
-            # 516: Beperkt recht wijziging
             516: r"(wijziging|aanvulling).*(voorwaarden|bepalingen)",
-            # 527: Erfpachtcanon wijziging
             527: r"(wijziging|herziening).*(canon|erfpacht)",
-            # 616: Splitsing
             616: r"(akte\s+van\s+)?(hoofd)?splitsing.*appartementsrecht(en)?",
-            # 671: Vermenging
             671: r"(akte\s+van\s+)?vermenging",
-            # 581: Divorce/Partnership
             581: r"verdeling.*(echtscheiding|ontbinding|huwelijk|partnerschap)",
-            # 579: Inheritance/Heirs
             579: r"verdeling.*(nalatenschap|erfgena(a)?m|overlijden)",
-            # 580: General Division (Catch-all if keywords above are missing)
             580: r"(akte\s+van\s+)?verdeling",
         }
-        # ------------------------
+
+        # --- SPEED OPTIMIZATION: TRIGGERS ---
+        # All triggers in lowercase for consistency
+        self.manual_triggers = {
+            606: ["levering", "vervreemding", "eigendom", "verkoop", "geleverd", "lever"],
+            572: ["erfdienstbaarhe"],
+            545: ["kwalitatieve", "252"],
+            537: ["hypotheek", "zekerheid"],
+            517: ["beslag"],
+            652: ["koopovereenkomst", "vormerkung"],
+            644: ["opstal"],
+            616: ["splitsing"],
+            538: ["royement", "afstand", "doorhaling"],
+            518: ["doorhaling", "opheffing"],
+        }
 
         self._generate_regexes()
 
     def _generate_regexes(self):
-        """
-        Parses the CSV and generates regex patterns for each code.
-        """
         logger.info(f"Parsing {self.csv_path} for regex generation...")
-
         with open(self.csv_path, "r", encoding="utf-8") as f:
             reader = csv.reader(f, delimiter=";")
             header = next(reader, None)
@@ -86,67 +85,45 @@ class RegexGenerator:
             for row in reader:
                 if not row or len(row) < 2:
                     continue
-
                 try:
                     code = int(row[0].strip())
                     description = row[1].strip()
 
-                    # --- CHECK FOR OVERRIDE FIRST ---
+                    # Set Trigger (convert to lowercase)
+                    if code in self.manual_triggers:
+                        self.triggers[code] = [t.lower() for t in self.manual_triggers[code]]
+
+                    # Set Regex
                     if code in self.manual_overrides:
                         self.regexes[code] = self.manual_overrides[code]
                     else:
-                        # Fallback to auto-generation
-                        pattern = self._create_pattern(description)
-                        self.regexes[code] = pattern
-                    # --------------------------------
-
+                        self.regexes[code] = self._create_pattern(description)
                 except ValueError:
                     continue
-
-        logger.info(f"Generated {len(self.regexes)} regex patterns.")
+        logger.info(f"Generated {len(self.regexes)} regex patterns and {len(self.triggers)} trigger sets.")
 
     def generate_hash(self) -> str:
-        """
-        Generates a hash so we can spot changes in the regex patterns.
-        This helps with caching
-        """
         import hashlib
-
-        # Sort by code to ensure stability
-        sorted_items = sorted(self.regexes.items())
-        # Create a string representation
-        repr_str = str(sorted_items)
-        # Hash it
+        # Hash triggers too, as they affect output logic
+        sorted_regex = sorted(self.regexes.items())
+        sorted_triggers = sorted(self.triggers.items())
+        repr_str = str(sorted_regex) + str(sorted_triggers)
         return hashlib.md5(repr_str.encode()).hexdigest()[:8]
 
     def _create_pattern(self, description: str) -> str:
-        """
-        Converts a description into a flexible regex pattern.
-        """
-        # Handle "enz." (etc.) - remove it
         clean_desc = description.replace("enz.", "").strip()
-
         if "(" in clean_desc and ")" in clean_desc:
-            # Split by parens
             parts = re.split(r"[\(\)]", clean_desc)
-            # Filter empty and strip
             parts = [p.strip() for p in parts if p.strip()]
-
             pattern_parts = []
             for p in parts:
                 escaped = re.escape(p)
-                # Flexible whitespace
                 escaped = escaped.replace(r"\ ", r"\s+")
                 pattern_parts.append(escaped)
-
-            # Combine with .* to match in order, allowing anything in between
             pattern = ".*".join(pattern_parts)
         else:
-            # Standard handling
             escaped = re.escape(clean_desc)
-            # Flexible whitespace
             pattern = escaped.replace(r"\ ", r"\s+")
-
         return pattern
 
 
@@ -158,9 +135,6 @@ class RegexClassifier:
         }
 
     def predict(self, text: str) -> List[int]:
-        """
-        Returns a list of codes found in the text.
-        """
         matches = []
         for code, pattern in self.patterns.items():
             if pattern.search(text):
@@ -169,67 +143,242 @@ class RegexClassifier:
 
 
 class RegexVectorizer:
-    def __init__(self, generator: RegexGenerator, label_encoder=None):
+    def __init__(self, generator: RegexGenerator, label_encoder=None,
+                 use_caching: bool = True, max_cache_size: int = 1000):
         self.generator = generator
         self.hash = generator.generate_hash()
-
-        """
-        Args:
-            generator: The RegexGenerator instance.
-            label_encoder: Optional LabelEncoder to align outputs with model classes.
-        """
         self.output_dim = 0
         self.code_to_idx = {}
-        # Use the simple regexes (code -> pattern)
         self.patterns = {}
+        self.triggers = {}  # Map idx -> set of trigger strings
+        self.use_caching = use_caching
 
         if label_encoder is None:
-            logger.error(
-                "LabelEncoder is required for RegexVectorizer to align with model classes."
-            )
+            logger.error("LabelEncoder is required for RegexVectorizer.")
             raise ValueError("LabelEncoder is required.")
 
-        # Single Source of Truth: Use the encoder's codes and indices
         self.code_to_idx = label_encoder.code2idx
         self.output_dim = len(label_encoder)
 
-        # Only compile patterns for codes that are in the encoder (and have a regex)
+        # Build patterns and triggers
         for code_str, idx in self.code_to_idx.items():
             try:
                 code_int = int(code_str)
+                # Store regex
                 if code_int in generator.regexes:
                     self.patterns[idx] = re.compile(
-                        generator.regexes[code_int], re.IGNORECASE | re.DOTALL
+                        generator.regexes[code_int],
+                        re.IGNORECASE | re.DOTALL  # Use DOTALL flag instead of (?s)
                     )
+                # Store triggers as sets for fast lookup
+                if code_int in generator.triggers:
+                    self.triggers[idx] = set(generator.triggers[code_int])
             except ValueError:
                 continue
 
-    def _match_text(self, text: str) -> List[int]:
-        """Helper for parallel processing: returns list of indices that matched."""
+        # Build reverse index: trigger word -> list of code indices
+        self.word_to_codes = {}
+        for idx, triggers in self.triggers.items():
+            for trigger in triggers:
+                self.word_to_codes.setdefault(trigger, []).append(idx)
+
+        # Initialize Aho-Corasick automaton if available
+        if USE_AHO_CORASICK:
+            self.automaton = ahocorasick.Automaton()
+            for trigger, code_list in self.word_to_codes.items():
+                self.automaton.add_word(trigger, (trigger, code_list))
+            self.automaton.make_automaton()
+            logger.info(f"Built Aho-Corasick automaton with {len(self.word_to_codes)} triggers")
+        else:
+            self.automaton = None
+
+        # Setup caching
+        if use_caching:
+            self._match_text_cached = lru_cache(maxsize=max_cache_size)(self._match_text_uncached)
+            logger.info(f"Enabled caching with max size {max_cache_size}")
+        else:
+            self._match_text_cached = self._match_text_uncached
+
+    def _match_text_uncached(self, text: str) -> List[int]:
+        """
+        Core matching logic without caching.
+        """
         matches = []
-        for idx, pattern in self.patterns.items():
-            if pattern.search(text):
+        text_lower = text.lower()  # Lowercase once
+
+        # Get triggered indices
+        triggered_indices = self._get_triggered_indices(text_lower)
+
+        # Check regex for triggered codes
+        for idx in triggered_indices:
+            if self.patterns.get(idx) and self.patterns[idx].search(text):  # Use original text for regex
                 matches.append(idx)
+
+        # Check codes without triggers
+        for idx, pattern in self.patterns.items():
+            if idx not in self.triggers:  # Only codes without triggers
+                if pattern.search(text):
+                    matches.append(idx)
+
         return matches
+
+    def _get_triggered_indices(self, text_lower: str) -> Set[int]:
+        """
+        Get all code indices that have at least one trigger in the text.
+        Uses Aho-Corasick if available, otherwise uses standard method.
+        """
+        triggered_indices = set()
+
+        if self.automaton:
+            # Use Aho-Corasick for O(n) scanning
+            for _, (_, code_list) in self.automaton.iter(text_lower):
+                triggered_indices.update(code_list)
+        else:
+            # Standard method: check each trigger
+            for trigger, code_list in self.word_to_codes.items():
+                if trigger in text_lower:
+                    triggered_indices.update(code_list)
+
+        return triggered_indices
+
+    def _match_text(self, text: str) -> List[int]:
+        """
+        Public method that uses caching if enabled.
+        """
+        return self._match_text_cached(text)
 
     def forward(self, texts: List[str]) -> torch.Tensor:
         """
-        Transforms a list of texts into a binary tensor of shape (batch_size, num_classes).
-        Values:
-        0: No match
-        1: Match
+        Vectorized forward pass with optimized parallel processing.
         """
-        from joblib import Parallel, delayed
-
         batch_size = len(texts)
         features = torch.zeros((batch_size, self.output_dim), dtype=torch.float32)
 
-        # Parallelize the matching process
-        # n_jobs=-1 uses all available cores
-        results = Parallel(n_jobs=-1)(delayed(self._match_text)(text) for text in texts)
+        # Adjust parallelism based on text size
+        if not texts:
+            return features
 
-        for i, matched_indices in enumerate(results):
-            if matched_indices:
-                features[i, matched_indices] = 1.0
+        avg_len = sum(len(t) for t in texts) / len(texts)
+
+        # For very short texts or small batches, avoid parallel overhead
+        if len(texts) < 10 or avg_len < 100:
+            # Sequential processing
+            for i, text in enumerate(texts):
+                matched_indices = self._match_text(text)
+                if matched_indices:
+                    features[i, matched_indices] = 1.0
+        else:
+            # Parallel processing
+            from joblib import Parallel, delayed
+            import multiprocessing
+
+            # Use threading backend for I/O bound operations
+            n_jobs = min(multiprocessing.cpu_count(), len(texts))
+
+            with Parallel(n_jobs=n_jobs, backend='threading') as parallel:
+                results = parallel(
+                    delayed(self._match_text)(text)
+                    for text in texts
+                )
+
+            # Vectorized assignment
+            for i, matched_indices in enumerate(results):
+                if matched_indices:
+                    features[i, matched_indices] = 1.0
 
         return features
+
+    def clear_cache(self):
+        """Clear the LRU cache."""
+        if hasattr(self._match_text_cached, 'cache_clear'):
+            self._match_text_cached.cache_clear()
+            logger.info("Cleared regex matching cache")
+
+
+# Performance profiling decorator
+def profile_method(method_name: str = None):
+    """
+    Decorator to profile method execution time.
+    """
+    import time
+    from functools import wraps
+
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            name = method_name or func.__name__
+            start = time.time()
+            result = func(*args, **kwargs)
+            elapsed = time.time() - start
+            logger.debug(f"{name} took {elapsed:.4f}s")
+            return result
+
+        return wrapper
+
+    return decorator
+
+
+# Example usage and testing
+if __name__ == "__main__":
+    # Test the optimized version
+    from collections import defaultdict
+
+
+    # Mock LabelEncoder for testing
+    class MockLabelEncoder:
+        def __init__(self, codes):
+            self.code2idx = {str(code): idx for idx, code in enumerate(codes)}
+            self.idx2code = {idx: str(code) for idx, code in enumerate(codes)}
+
+        def __len__(self):
+            return len(self.code2idx)
+
+
+    # Create test data
+    test_texts = [
+        "Dit is een hypotheekakte voor een woning in Amsterdam.",
+        "Beslaglegging op de inboedel van de woning.",
+        "Kwalitatieve verplichting volgens artikel 6:252.",
+        "Levering van een auto aan de koper.",
+        "Een erfdienstbaarheid wordt gevestigd voor toegang.",
+        "Royement van de hypotheek op het pand.",
+    ]
+
+    # Initialize
+    generator = RegexGenerator("your_csv_file.csv")  # Replace with actual path
+    label_encoder = MockLabelEncoder(list(generator.regexes.keys()))
+    vectorizer = RegexVectorizer(generator, label_encoder, use_caching=True)
+
+
+    # Test single text
+    @profile_method("single_match")
+    def test_single():
+        text = test_texts[0]
+        matches = vectorizer._match_text(text)
+        print(f"Text: {text[:50]}...")
+        print(f"Matches: {matches}")
+        return matches
+
+
+    # Test batch
+    @profile_method("batch_forward")
+    def test_batch():
+        results = vectorizer.forward(test_texts)
+        print(f"Batch shape: {results.shape}")
+        print(f"Non-zero counts per text: {results.sum(dim=1)}")
+        return results
+
+
+    # Run tests
+    print("=" * 60)
+    print("Testing optimized RegexVectorizer")
+    print("=" * 60)
+
+    test_single()
+    print("-" * 40)
+    test_batch()
+
+    # Show cache stats if available
+    if vectorizer.use_caching:
+        cache_info = vectorizer._match_text_cached.cache_info()
+        print(f"\nCache stats: Hits={cache_info.hits}, Misses={cache_info.misses}, Size={cache_info.currsize}")
